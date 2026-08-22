@@ -153,26 +153,25 @@ existing instance to the foreground instead of starting a second copy.
 
 ## Compatibility
 
-The controller was developed and tested with:
+The controller was developed and tested specifically for:
 
--   Lenovo Legion Y720
--   Windows 10 / Windows 11
--   64-bit Windows
+- Lenovo Legion Y720
+- Windows 10 / Windows 11
+- 64-bit Windows
 
 The tested keyboard lighting HID interface is:
 
-``` text
 Vendor ID:  048D
 Product ID: 837A
 
 Usage Page: FF89
 Usage:      00CC
-```
 
 The lighting interface is specific to the Legion Y720 keyboard hardware.
 
-Other Lenovo Legion models may use different HID interfaces and are not
-expected to work without additional investigation.
+Other Lenovo models have not been verified.
+
+If you have another Lenovo laptop that previously used Nerve Sense or Nerve Center and would like to test compatibility, please report your model and results in the repository.
 
 ## Installation
 
