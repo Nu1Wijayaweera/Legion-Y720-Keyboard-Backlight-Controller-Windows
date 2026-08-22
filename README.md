@@ -1,560 +1,308 @@
 # Legion Y720 Keyboard Backlight Controller for Windows
 
-A lightweight native Windows controller for the RGB keyboard backlight of the Lenovo Legion Y720.
+A lightweight native Windows controller for the RGB keyboard backlight
+of the Lenovo Legion Y720.
 
-The project provides both:
+<p align="center">
+  <img src="assets/Y720Backlight.png" alt="Legion Y720 Keyboard Backlight Controller" width="180">
+</p>
 
-- A command-line controller
-- A native Windows GUI with system-tray integration
-- Independent control of all four keyboard lighting zones
-- Configurable profiles
+<p align="center">
+  A lightweight native Windows controller for the RGB keyboard backlight of the Lenovo Legion Y720.
+</p>
 
-It communicates directly with the keyboard's HID interface and does not require Lenovo's proprietary lighting software.
+<p align="center">
+  <img src="assets/screenshot.png" alt="Legion Y720 Keyboard Backlight Controller" width="850">
+</p>
 
----
+This project was created as a replacement for Lenovo Nerve Center /
+Nerve Sense after the original lighting software became unavailable or
+unreliable on the Y720.
 
-# Features
+The controller communicates directly with the keyboard through the
+Windows HID API and does not require Lenovo's proprietary lighting
+software.
 
-- Direct Windows HID communication
-- RGB keyboard backlight control
-- Four-zone independent lighting control
-- Color selection
-- Brightness control
-- Multiple lighting modes
-- Profiles stored in an INI configuration file
-- Native Windows GUI
-- System-tray controller
-- Tray controls for turning lighting on/off
-- Click the tray icon to restore the GUI
-- Command-line interface
-- No installer required
-- No background service required
-- No Lenovo software required
+## Features
 
----
+-   Native Windows GUI
+-   Four-zone independent colour control
+-   Four-zone independent brightness control
+-   Keyboard-wide lighting modes
+-   Smooth colour cycling
+-   Profiles stored in an INI configuration file
+-   Create and delete profiles from the GUI
+-   System-tray integration
+-   Tray controls for turning lighting on and off
+-   Persistent lighting state
+-   Restore the previous lighting state when Windows starts
+-   Optional Start with Windows setting
+-   Fn + Space keyboard shortcut
+-   Single-instance application
+-   No installer required
+-   No background service required
+-   No administrator privileges required
+-   No Lenovo software required
 
-# No Lenovo software required
+## Lighting Control
 
-This project does **not** require:
+### Global Lighting
 
-- Lenovo Vantage
-- Lenovo Nerve Center
-- Lenovo Utility
-- Lenovo Legion software
-- A background service
+The global controls can apply a colour and brightness setting to all
+four keyboard zones simultaneously.
 
-The controller communicates directly with the keyboard through the Windows HID API.
+Keyboard lighting modes are keyboard-wide on the Y720. A mode cannot be
+assigned independently to individual zones.
 
----
+Zone-specific colour and brightness settings are preserved when changing
+keyboard-wide modes.
 
-# Compatibility
+### Individual Zones
+
+The Y720 keyboard is divided into four controllable lighting zones:
+
+-   Zone 0 --- Caps Lock to D
+-   Zone 1 --- F to K
+-   Zone 2 --- L to Enter
+-   Zone 3 --- Numeric Keypad
+
+Each zone can have its own colour and brightness.
+
+### Smooth Lighting
+
+Smooth mode continuously cycles the keyboard lighting through colours.
+
+The currently selected global colour and brightness are used as the
+starting state for the transition.
+
+### Profiles
+
+Profiles allow frequently used lighting configurations to be saved and
+recalled.
+
+Profiles can contain:
+
+-   Four-zone colour settings
+-   Four-zone brightness settings
+-   Keyboard-wide lighting mode
+
+Profiles can be applied, created and deleted directly from the GUI.
+
+## Fn + Space
+
+The controller implements the classic Legion-style:
+
+**Fn + Space**
+
+keyboard lighting shortcut.
+
+Each press advances through the following lighting states:
+
+``` text
+Off → Low → Medium → Ultra → Off
+```
+
+If the lighting has been deliberately turned off, the next Fn + Space
+press always starts at **Low**, rather than continuing from the previous
+brightness level.
+
+The four-zone colour configuration is preserved when cycling brightness.
+
+### Important
+
+The GUI must remain running in the Windows system tray for the Fn +
+Space shortcut to work.
+
+The application does not install a background service or keyboard driver
+for this functionality.
+
+## Persistent State
+
+The controller saves the current lighting state so that it can be
+restored when Windows starts.
+
+The saved state includes the configured zone lighting and other relevant
+controller state.
+
+The application can optionally be configured to start with Windows and
+restore the previous lighting state automatically.
+
+Normal Windows startup restoration occurs after the user session starts.
+The application does not install a Windows service or require
+administrator privileges solely for pre-login lighting control.
+
+## System Tray
+
+When minimized, the application can remain running in the Windows system
+tray.
+
+The tray menu provides quick access to:
+
+-   Show the main window
+-   Turn lighting on
+-   Turn lighting off
+-   Exit the application
+
+Turning lighting off does not discard the current four-zone
+configuration. Turning the lighting back on restores the previously
+configured zone state.
+
+## Single Instance
+
+Only one instance of the controller can run at a time.
+
+Launching the application again while it is already running brings the
+existing instance to the foreground instead of starting a second copy.
+
+## Compatibility
 
 The controller was developed and tested with:
 
-- Lenovo Legion Y720
-- Windows 10 64-bit
+-   Lenovo Legion Y720
+-   Windows 10 / Windows 11
+-   64-bit Windows
 
-Known HID device:
+The tested keyboard lighting HID interface is:
 
-    Vendor ID:       048D
-    Product ID:      837A
-    Version:         0009
+``` text
+Vendor ID:  048D
+Product ID: 837A
 
-Keyboard lighting HID collection:
+Usage Page: FF89
+Usage:      00CC
+```
 
-    Usage Page:      FF89
-    Usage:           00CC
+The lighting interface is specific to the Legion Y720 keyboard hardware.
 
-The lighting collection exposes a 7-byte feature report.
+Other Lenovo Legion models may use different HID interfaces and are not
+expected to work without additional investigation.
 
-Other Lenovo laptops may use different hardware or HID protocols and are not guaranteed to work.
-
-If you have another Lenovo model and want to investigate compatibility, contributions and testing reports are welcome.
-
----
-
-# Download
-
-Precompiled Windows binaries are available from the GitHub Releases section.
-
-The release package contains the required executables and configuration file.
+## Installation
 
 No installer is required.
 
-Extract the release ZIP and run:
+Place the release executable in a convenient location and run:
 
-    Y720BacklightGUI.exe
+``` text
+Y720BacklightGUI.exe
+```
 
-The command-line controller is:
+The application can optionally be configured to start with Windows from
+within the GUI.
 
-    Y720Backlight.exe
+The program does not require:
 
-Keep `Y720Backlight.exe` and `Y720BacklightGUI.exe` together in the same directory.
+-   Lenovo Nerve Center
+-   Lenovo Nerve Sense
+-   Lenovo Vantage
+-   A separate command-line controller
+-   A Windows service
+-   Administrator privileges
 
-The GUI launches the command-line controller automatically when applying lighting settings.
+## Configuration
 
----
+Profiles and persistent configuration are stored using an INI
+configuration file.
 
-# Windows GUI
+The configuration file can be kept alongside the application according
+to the supplied release folder structure.
 
-The GUI provides a native Windows interface for controlling the keyboard.
+The application manages profile creation and deletion through the GUI,
+so users do not normally need to edit the INI file manually.
 
-It includes:
+## Building from Source
 
-- Global lighting controls
-- Four independent lighting zones
-- Profiles
-- Status information
-- System-tray integration
+The project is written in native C for Windows.
 
-## Global Lighting
+The supplied build script uses GCC and `windres` from a MinGW/MinGW-w64
+environment.
 
-The global controls allow you to select:
+Build requirements:
 
-- Color
-- Brightness
-- Mode
-
-and apply the settings to all four zones.
-
-Example:
-
-    Crimson
-    High
-    Always On
-
----
-
-# Four-Zone Control
-
-The keyboard is divided into four controllable lighting zones:
-
-    Zone 0: Caps Lock -> D
-    Zone 1: F -> K
-    Zone 2: L -> Enter
-    Zone 3: Numeric Keypad
-
-Each zone has its own:
-
-- Color
-- Brightness
-- Mode
-
-The GUI provides an `Apply` button for each zone.
-
-This allows different colors and effects to be used across different areas of the keyboard.
-
----
-
-# System Tray
-
-The GUI can remain available in the Windows system tray.
-
-When the GUI is minimized or closed, it is hidden rather than terminated.
-
-Clicking the tray keyboard icon restores the controller window.
-
-Right-clicking the tray icon provides controls for:
-
-- Turn Lighting Off
-- Turn Lighting On
-- Exit
-
-If Windows Explorer restarts, the application automatically attempts to recreate the tray icon.
-
----
-
-# Command-Line Controller
-
-The command-line executable can be used independently of the GUI.
-
-Open Command Prompt in the directory containing `Y720Backlight.exe`.
-
-## Show help
-
-    Y720Backlight.exe help
-
----
-
-# Set Color, Brightness and Mode
-
-The recommended command is:
-
-    Y720Backlight.exe set COLOR BRIGHTNESS MODE
-
-Examples:
-
-    Y720Backlight.exe set crimson high always_on
-
-    Y720Backlight.exe set blue low breath
-
-    Y720Backlight.exe set green medium smooth
-
-    Y720Backlight.exe set white ultra wave
-
-    Y720Backlight.exe set crimson high heartbeat
-
-This sends the color, brightness and mode together.
-
-Using the complete `set` command is recommended because the keyboard firmware may otherwise restore or default another property when individual settings are changed.
-
----
-
-# Colors
-
-Supported firmware color values:
-
-    crimson
-    torch_red
-    hollywood_cerise
-    magenta
-    electric_violet
-    electric_violet_2
-    blue
-    blue_ribbon
-    azure_radiance
-    cyan
-    spring_green
-    spring_green_2
-    green
-    bright_green
-    lime
-    yellow
-    web_orange
-    international_orange
-    white
-    nocolor
-
-Example:
-
-    Y720Backlight.exe set crimson high always_on
-
----
-
-# Brightness
-
-Supported firmware brightness values:
-
-    off
-    low
-    medium
-    high
-    ultra
-    enough
-
-Example:
-
-    Y720Backlight.exe set blue low always_on
-
-## Brightness observations
-
-On the tested Y720:
-
-- `off` works.
-- `low` works.
-- `medium` works.
-- `high` works, but is visually very similar to `medium`.
-- `ultra` works.
-- `enough` produced no obvious additional effect.
-
-These are values accepted by the keyboard firmware. Their visible effect may vary between hardware revisions.
-
----
-
-# Lighting Modes
-
-Supported modes:
-
-    heartbeat
-    breath
-    smooth
-    always_on
-    wave
-
-Examples:
-
-    Y720Backlight.exe set crimson high heartbeat
-
-    Y720Backlight.exe set crimson high breath
-
-    Y720Backlight.exe set crimson high smooth
-
-    Y720Backlight.exe set crimson high always_on
-
-    Y720Backlight.exe set crimson high wave
-
----
-
-# Turn the Keyboard Off
-
-    Y720Backlight.exe off
-
----
-
-# Profiles
-
-Profiles are stored in:
-
-    Y720Backlight.ini
-
-Profiles contain:
-
-- Color
-- Brightness
-- Mode
-
-Example:
-
-    [gaming]
-    color=crimson
-    brightness=high
-    mode=wave
-
-The GUI automatically reads the available profiles from the INI file.
-
-Profiles can also be used through the command-line controller.
-
-    Y720Backlight.exe profile gaming
-
-You can also use:
-
-    Y720Backlight.exe gaming
-
----
-
-# Example Configuration
-
-    [normal]
-    color=white
-    brightness=high
-    mode=always_on
-
-    [gaming]
-    color=crimson
-    brightness=high
-    mode=wave
-
-    [night]
-    color=blue
-    brightness=low
-    mode=always_on
-
-    [breathing_red]
-    color=crimson
-    brightness=high
-    mode=breath
-
----
-
-# List Profiles
-
-    Y720Backlight.exe profiles
-
----
-
-# HID Protocol
-
-The original Linux implementation sends a feature report of the form:
-
-    CC 00 mode color brightness zone
-
-The Windows implementation uses the native Windows HID API to send the equivalent feature report to the Y720 lighting HID collection.
-
-The tested lighting collection is:
-
-    VID:        048D
-    PID:        837A
-    Usage Page: FF89
-    Usage:      00CC
-
-The controller supports the keyboard's four lighting zones.
-
----
-
-# Building From Source
-
-## Requirements
-
-A MinGW GCC environment is required.
-
-MSYS2 can be used to provide GCC and the required Windows development tools.
-
-No Visual Studio installation is required.
-
-The build also requires:
-
-- GCC
-- `windres`
-- Windows system libraries provided by MinGW
-
----
-
-# Build
+-   GCC
+-   windres
+-   Windows development libraries provided by the compiler environment
 
 Run:
 
-    build.bat
+``` text
+build.bat
+```
 
-The build script creates:
+The build produces:
 
-    build\Y720Backlight.exe
-    build\Y720BacklightGUI.exe
+``` text
+build\\Y720BacklightGUI.exe
+```
 
-It also builds the GUI resource object and copies the configuration file into the build directory.
+The GUI is compiled as a standalone executable from:
 
-The resulting `build` directory is suitable for local testing.
+``` text
+src\\Y720BacklightGUI.c
+src\\Y720BacklightCore.c
+src\\Y720BacklightHID.c
+```
 
----
+along with the Windows application resources.
 
-# Source Structure
+The final GUI executable does **not** require the former
+`Y720Backlight.exe` command-line tool.
 
-The project is organized approximately as follows:
+## Project Structure
 
-    src\
-        Y720Backlight.c
-        Y720BacklightGUI.c
-        Y720BacklightGUI.rc
+The main source components are separated as follows:
 
-    resources\
-        keyboard.ico
+``` text
+src/
+    Y720BacklightGUI.c
+    Y720BacklightCore.c
+    Y720BacklightCore.h
+    Y720BacklightHID.c
+    Y720BacklightHID.h
+    Y720BacklightGUI.rc
 
-    config\
-        Y720Backlight.ini
+resources/
+    keyboard.ico
 
-    build\
-        (generated during build)
-
-The command-line controller contains the HID communication and command-line interface.
-
-The GUI provides the Windows interface and launches the command-line controller when applying settings.
-
----
-
-# Troubleshooting
-
-## "Y720 lighting device not found"
-
-Check that:
-
-1. The keyboard is connected and enabled.
-2. The machine is a Y720 or compatible device.
-3. The HID device has VID `048D` and PID `837A`.
-4. You are using the correct executable.
-
-The program does not depend on Lenovo's applications.
-
----
-
-## The command runs but the keyboard does not change
-
-The HID protocol is hardware-specific.
-
-Check whether your keyboard exposes:
-
-    Usage Page FF89
-    Usage 00CC
-
-Different Y720 revisions or other Lenovo laptops may use different controllers.
-
-If you discover compatibility with another machine, please consider opening a GitHub issue and reporting the hardware information.
-
----
-
-## A mode changes my color
-
-Use:
-
-    Y720Backlight.exe set COLOR BRIGHTNESS MODE
-
-For example:
-
-    Y720Backlight.exe set crimson high wave
-
-Using all three values together avoids unwanted firmware defaults.
-
----
-
-## Profiles do not appear in the GUI
-
-Make sure:
-
+config/
     Y720Backlight.ini
 
-is in the same release/build directory as the executables.
+build/
+    (generated build output)
+```
 
-For a source build, run `build.bat` so that the configuration file is copied into the build directory.
+## Security and System Design
 
----
+The controller is intentionally designed to remain lightweight and
+minimally invasive.
 
-# Project Status
+It does not install:
 
-The project currently provides a working Windows controller for the tested Lenovo Legion Y720 hardware.
+-   Kernel drivers
+-   Keyboard filter drivers
+-   Background services
+-   Scheduled privileged services
+-   Lenovo software
+-   Administrator-level components
 
-Current functionality includes:
+The application communicates with the keyboard using the Windows HID
+interface and performs its normal configuration and persistence tasks
+from user space.
 
-- Direct Windows HID communication
-- Y720 lighting detection
-- RGB color control
-- Brightness control
-- Lighting modes
-- Four-zone control
-- Independent zone settings
-- Profiles
-- Command-line interface
-- Native Windows GUI
-- System-tray integration
-- No Lenovo software required
+## Why This Project Exists
 
-The project is considered usable, but compatibility with additional Y720 hardware revisions and other Lenovo models has not been fully investigated.
+The Lenovo Legion Y720 is a capable gaming laptop whose original
+lighting software is no longer reliably available on modern Windows
+installations.
 
----
+Rather than depending on obsolete proprietary software, this project
+provides a small native controller specifically designed around the
+Y720's hardware.
 
-# Contributing
+The goal is to provide the functionality users actually need while
+keeping the application simple, transparent and independent of Lenovo's
+discontinued software.
 
-Contributions are welcome.
+## License
 
-If you have:
-
-- Another Lenovo laptop that appears to use the same lighting hardware
-- A different Y720 hardware revision
-- HID protocol information
-- Bug fixes
-- UI improvements
-- New features
-- Documentation improvements
-
-please consider opening an issue or submitting a pull request.
-
-You do not need to be the original author to improve the project.
-
----
-
-# Credits
-
-This project is based in part on the work of:
-
-`threadexio/Legion-Y720-Keyboard-Backlight`
-
-Original project:
-
-Copyright (c) 2021 1337
-
-The original project is licensed under the MIT License.
-
-See:
-
-    THIRD-PARTY-NOTICES.md
-
-for the original license notice.
-
----
-
-# License
-
-This Windows implementation is released under the MIT License.
-
-See `LICENSE` for details.
-
-The original project's copyright and license are preserved in:
-
-    THIRD-PARTY-NOTICES.md
+See the repository for the applicable license and project terms.
