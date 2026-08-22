@@ -173,6 +173,19 @@ Other Lenovo models have not been verified.
 
 If you have another Lenovo laptop that previously used Nerve Sense or Nerve Center and would like to test compatibility, please report your model and results in the repository.
 
+## Reporting Compatibility
+
+If you have a different Lenovo laptop that previously used Nerve Sense or Nerve Center, you are welcome to test the application and report the results.
+
+Please include:
+
+- Exact laptop model
+- Windows version
+- Whether the application launches
+- Whether keyboard lighting responds
+- Whether Fn + Space works
+- Any unexpected behaviour or errors
+
 ## Installation
 
 No installer is required.
