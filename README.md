@@ -1,8 +1,5 @@
 # Legion Y720 Keyboard Backlight Controller for Windows
 
-A lightweight native Windows controller for the RGB keyboard backlight
-of the Lenovo Legion Y720.
-
 <p align="center">
   <img src="assets/Y720Backlight.png" alt="Legion Y720 Keyboard Backlight Controller" width="180">
 </p>
