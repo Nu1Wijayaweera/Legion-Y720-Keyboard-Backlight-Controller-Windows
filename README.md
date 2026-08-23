@@ -1,7 +1,7 @@
 # Legion Y720 Keyboard Backlight Controller for Windows
 
 <p align="center">
-  <img src="assets/Y720Backlight.png" alt="Legion Y720 Keyboard Backlight Controller" width="180">
+  <img src="assets/github-social-preview.png" alt="Legion Y720 Keyboard Backlight Controller" width="850">
 </p>
 
 <p align="center">
@@ -168,10 +168,6 @@ Usage Page: FF89
 Usage:      00CC
 
 The lighting interface is specific to the Legion Y720 keyboard hardware.
-
-Other Lenovo models have not been verified.
-
-If you have another Lenovo laptop that previously used Nerve Sense or Nerve Center and would like to test compatibility, please report your model and results in the repository.
 
 ## Reporting Compatibility
 
