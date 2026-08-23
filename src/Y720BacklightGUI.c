@@ -1094,10 +1094,6 @@ static void show_main_window(void);
 static LRESULT CALLBACK ProfileDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
-        case WM_SHOW_EXISTING:
-            show_main_window();
-            return 0;
-
         case WM_CREATE: {
             int color_count = (int)(sizeof(colors) / sizeof(colors[0]));
             int bright_count = (int)(sizeof(brightness) / sizeof(brightness[0]));
@@ -1482,6 +1478,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
     }
 
     switch (message) {
+        case WM_SHOW_EXISTING:
+            show_main_window();
+            return 0;
+
         case WM_CREATE:
             create_controls(hwnd);
             if (!add_tray_icon(hwnd)) set_status("Warning: unable to create system tray icon.");
@@ -1627,6 +1627,32 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command_line, i
     if (!g_hWnd) {
         MessageBoxA(NULL, "Unable to create GUI window.", APP_TITLE, MB_ICONERROR);
         return 1;
+    }
+
+    {
+        POINT cursor_point;
+        HMONITOR monitor;
+        MONITORINFO monitor_info;
+        RECT window_rect;
+        int width, height;
+        int x, y;
+
+        if (GetCursorPos(&cursor_point)) {
+            monitor = MonitorFromPoint(cursor_point, MONITOR_DEFAULTTONEAREST);
+            ZeroMemory(&monitor_info, sizeof(monitor_info));
+            monitor_info.cbSize = sizeof(monitor_info);
+            if (GetMonitorInfoA(monitor, &monitor_info) &&
+                GetWindowRect(g_hWnd, &window_rect)) {
+                width = window_rect.right - window_rect.left;
+                height = window_rect.bottom - window_rect.top;
+                x = monitor_info.rcWork.left +
+                    (monitor_info.rcWork.right - monitor_info.rcWork.left - width) / 2;
+                y = monitor_info.rcWork.top +
+                    (monitor_info.rcWork.bottom - monitor_info.rcWork.top - height) / 2;
+                SetWindowPos(g_hWnd, NULL, x, y, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+        }
     }
 
     if (g_appIcon) {
