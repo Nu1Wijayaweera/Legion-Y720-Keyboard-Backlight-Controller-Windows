@@ -8,9 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#pragma comment(lib, "setupapi.lib")
-#pragma comment(lib, "hid.lib")
-
 #define REPORT_ID       Y720_REPORT_ID
 #define REPORT_LENGTH   Y720_REPORT_LENGTH
 #define ZONE_COUNT      Y720_ZONE_COUNT

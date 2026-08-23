@@ -236,13 +236,26 @@ static int get_exe_directory(char *buffer, DWORD buffer_size)
     return 1;
 }
 
+static int build_path(char *buffer, size_t buffer_size, const char *base, const char *suffix)
+{
+    int written;
+
+    if (!buffer || buffer_size == 0 || !base || !suffix) return 0;
+
+    written = snprintf(buffer, buffer_size, "%s\\%s", base, suffix);
+    if (written < 0 || (size_t)written >= buffer_size) {
+        buffer[0] = '\0';
+        return 0;
+    }
+
+    return 1;
+}
+
 static int get_config_path(char *buffer, DWORD buffer_size)
 {
     char directory[MAX_PATH];
     if (!get_exe_directory(directory, sizeof(directory))) return 0;
-    snprintf(buffer, buffer_size, "%s\\Y720Backlight.ini", directory);
-    buffer[buffer_size - 1] = '\0';
-    return 1;
+    return build_path(buffer, buffer_size, directory, "Y720Backlight.ini");
 }
 
 
@@ -307,16 +320,22 @@ typedef struct {
 static int get_state_path(char *buffer, DWORD buffer_size)
 {
     char appdata[MAX_PATH];
+    DWORD length;
+
     if (!buffer || buffer_size == 0) return 0;
-    if (!GetEnvironmentVariableA("APPDATA", appdata, sizeof(appdata)) || !appdata[0])
+
+    length = GetEnvironmentVariableA("APPDATA", appdata, sizeof(appdata));
+    if (!length || length >= sizeof(appdata) || !appdata[0])
         return 0;
 
-    snprintf(buffer, buffer_size, "%s\\LegionY720Backlight", appdata);
-    buffer[buffer_size - 1] = '\0';
+    if (!build_path(buffer, buffer_size, appdata, "LegionY720Backlight"))
+        return 0;
+
     CreateDirectoryA(buffer, NULL);
 
-    snprintf(buffer, buffer_size, "%s\\LegionY720Backlight\\state.ini", appdata);
-    buffer[buffer_size - 1] = '\0';
+    if (!build_path(buffer, buffer_size, appdata, "LegionY720Backlight\\state.ini"))
+        return 0;
+
     return 1;
 }
 
