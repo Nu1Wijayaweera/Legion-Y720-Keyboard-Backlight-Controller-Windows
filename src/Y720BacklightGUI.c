@@ -60,6 +60,10 @@ static HICON g_appIcon = NULL;
 static HBRUSH g_bgBrush = NULL;
 static HBRUSH g_controlBrush = NULL;
 static HANDLE g_single_instance_mutex = NULL;
+static int g_dpi = 96;
+static int g_lighting_on = 1;
+static char g_config_path[MAX_PATH];
+static int g_config_path_initialized = 0;
 
 /* Runtime copy of the last lighting state before an explicit Off command.
    This lets tray On restore the exact four-zone state without changing the
@@ -68,8 +72,66 @@ static int g_last_on_valid = 0;
 
 static void update_lighting_toggle_button(int lighting_on)
 {
+    g_lighting_on = lighting_on ? 1 : 0;
     if (g_lightingToggle)
-        SetWindowTextA(g_lightingToggle, lighting_on ? "Turn Lighting Off" : "Turn Lighting On");
+        SetWindowTextA(g_lightingToggle, g_lighting_on ? "Turn Lighting Off" : "Turn Lighting On");
+}
+
+#define SCALE(value) MulDiv((value), g_dpi, 96)
+
+static void init_dpi_scaling(void)
+{
+    HMODULE user32;
+    FARPROC set_process_dpi_aware_proc;
+    BOOL (WINAPI *set_process_dpi_aware)(void) = NULL;
+    HDC dc;
+
+    user32 = GetModuleHandleA("user32.dll");
+    set_process_dpi_aware_proc = user32 ?
+        GetProcAddress(user32, "SetProcessDPIAware") : NULL;
+    if (set_process_dpi_aware_proc) {
+        /*
+         * GetProcAddress returns FARPROC. Copy the address into the correctly
+         * typed function pointer without an incompatible-function-pointer cast.
+         */
+        memcpy(&set_process_dpi_aware,
+               &set_process_dpi_aware_proc,
+               sizeof(set_process_dpi_aware));
+        if (set_process_dpi_aware)
+            set_process_dpi_aware();
+    }
+
+    dc = GetDC(NULL);
+    if (dc) {
+        int dpi = GetDeviceCaps(dc, LOGPIXELSX);
+        if (dpi > 0) g_dpi = dpi;
+        ReleaseDC(NULL, dc);
+    }
+}
+
+static void center_window_on_active_monitor(HWND hwnd)
+{
+    POINT point;
+    HMONITOR monitor;
+    MONITORINFO info;
+    RECT rect;
+    int width, height, x, y;
+
+    if (!hwnd) return;
+    if (!GetCursorPos(&point)) return;
+    monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+    if (!monitor) return;
+
+    ZeroMemory(&info, sizeof(info));
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfoA(monitor, &info)) return;
+    if (!GetWindowRect(hwnd, &rect)) return;
+
+    width = rect.right - rect.left;
+    height = rect.bottom - rect.top;
+    x = info.rcWork.left + ((info.rcWork.right - info.rcWork.left) - width) / 2;
+    y = info.rcWork.top + ((info.rcWork.bottom - info.rcWork.top) - height) / 2;
+    SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 static char g_last_on_mode[64];
 static char g_last_on_global_color[64];
@@ -107,8 +169,8 @@ static const char *color_labels[] = {
 static const char *brightness[] = { "off", "low", "medium", "high", "ultra", "enough" };
 static const char *brightness_labels[] = { "Off", "Low", "Medium", "High", "Ultra", "Enough" };
 
-static const char *modes[] = { "always_on", "breath", "heartbeat", "wave" };
-static const char *mode_labels[] = { "Always On", "Breath", "Heartbeat", "Wave" };
+static const char *modes[] = { "always_on", "breath", "heartbeat", "smooth", "wave" };
+static const char *mode_labels[] = { "Always On", "Breath", "Heartbeat", "Smooth", "Wave" };
 static const char *friendly_value(const char *value,
                                   const char **values, const char **labels, int count)
 {
@@ -253,9 +315,46 @@ static int build_path(char *buffer, size_t buffer_size, const char *base, const 
 
 static int get_config_path(char *buffer, DWORD buffer_size)
 {
-    char directory[MAX_PATH];
-    if (!get_exe_directory(directory, sizeof(directory))) return 0;
-    return build_path(buffer, buffer_size, directory, "Y720Backlight.ini");
+    char directory[MAX_PATH], candidate[MAX_PATH];
+    HANDLE file;
+
+    if (!buffer || buffer_size == 0) return 0;
+    if (g_config_path_initialized) {
+        snprintf(buffer, buffer_size, "%s", g_config_path);
+        buffer[buffer_size - 1] = '\0';
+        return g_config_path[0] != '\0';
+    }
+
+    g_config_path[0] = '\0';
+    if (!get_exe_directory(directory, sizeof(directory))) goto done;
+    if (!build_path(candidate, sizeof(candidate), directory, "Y720Backlight.ini")) goto done;
+
+    file = CreateFileA(candidate, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                       NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file != INVALID_HANDLE_VALUE) {
+        CloseHandle(file);
+        snprintf(g_config_path, sizeof(g_config_path), "%s", candidate);
+        goto done;
+    }
+
+    {
+        char appdata[MAX_PATH], folder[MAX_PATH], fallback[MAX_PATH];
+        DWORD length = GetEnvironmentVariableA("APPDATA", appdata, sizeof(appdata));
+        if (!length || length >= sizeof(appdata)) goto done;
+        if (!build_path(folder, sizeof(folder), appdata, "LegionY720Backlight")) goto done;
+        if (!CreateDirectoryA(folder, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) goto done;
+        if (!build_path(fallback, sizeof(fallback), folder, "Y720Backlight.ini")) goto done;
+        if (GetFileAttributesA(fallback) == INVALID_FILE_ATTRIBUTES)
+            CopyFileA(candidate, fallback, TRUE);
+        snprintf(g_config_path, sizeof(g_config_path), "%s", fallback);
+    }
+
+done:
+    g_config_path[sizeof(g_config_path) - 1] = '\0';
+    g_config_path_initialized = 1;
+    snprintf(buffer, buffer_size, "%s", g_config_path);
+    buffer[buffer_size - 1] = '\0';
+    return g_config_path[0] != '\0';
 }
 
 
@@ -473,6 +572,48 @@ static void save_state_values(int enabled, const char *mode,
     }
 }
 
+static void save_last_on_state(void)
+{
+    char path[MAX_PATH];
+    int zone;
+
+    if (!g_last_on_valid || !get_state_path(path, sizeof(path))) return;
+
+    WritePrivateProfileStringA("last_on", "valid", "1", path);
+    WritePrivateProfileStringA("last_on", "mode", g_last_on_mode, path);
+    WritePrivateProfileStringA("last_on", "global_color", g_last_on_global_color, path);
+    WritePrivateProfileStringA("last_on", "global_brightness", g_last_on_global_brightness, path);
+    for (zone = 0; zone < ZONE_COUNT; ++zone) {
+        char key[32];
+        snprintf(key, sizeof(key), "zone%d_color", zone);
+        WritePrivateProfileStringA("last_on", key, g_last_on_zone_color[zone], path);
+        snprintf(key, sizeof(key), "zone%d_brightness", zone);
+        WritePrivateProfileStringA("last_on", key, g_last_on_zone_brightness[zone], path);
+    }
+}
+
+static void load_last_on_state(void)
+{
+    char path[MAX_PATH], value[64], key[32];
+    int zone;
+
+    g_last_on_valid = 0;
+    if (!get_state_path(path, sizeof(path))) return;
+    GetPrivateProfileStringA("last_on", "valid", "0", value, sizeof(value), path);
+    if (atoi(value) != 1) return;
+
+    GetPrivateProfileStringA("last_on", "mode", "always_on", g_last_on_mode, sizeof(g_last_on_mode), path);
+    GetPrivateProfileStringA("last_on", "global_color", "crimson", g_last_on_global_color, sizeof(g_last_on_global_color), path);
+    GetPrivateProfileStringA("last_on", "global_brightness", "low", g_last_on_global_brightness, sizeof(g_last_on_global_brightness), path);
+    for (zone = 0; zone < ZONE_COUNT; ++zone) {
+        snprintf(key, sizeof(key), "zone%d_color", zone);
+        GetPrivateProfileStringA("last_on", key, g_last_on_global_color, g_last_on_zone_color[zone], sizeof(g_last_on_zone_color[zone]), path);
+        snprintf(key, sizeof(key), "zone%d_brightness", zone);
+        GetPrivateProfileStringA("last_on", key, g_last_on_global_brightness, g_last_on_zone_brightness[zone], sizeof(g_last_on_zone_brightness[zone]), path);
+    }
+    g_last_on_valid = 1;
+}
+
 static void save_current_state(int enabled, const char *mode_override)
 {
     char mode[64], global_color[64], global_brightness[32];
@@ -595,11 +736,16 @@ static int restore_saved_state(void)
         if (apply_all_direct(state.global_color, state.global_brightness, "smooth") != 0)
             return -1;
     } else {
+        int mode_id[ZONE_COUNT], color_id[ZONE_COUNT], bright_id[ZONE_COUNT];
         for (zone = 0; zone < ZONE_COUNT; ++zone) {
-            if (apply_zone_direct(zone, state.zone_color[zone],
-                                  state.zone_brightness[zone], state.mode) != 0)
+            mode_id[zone] = mode_value(state.mode);
+            color_id[zone] = color_value(state.zone_color[zone]);
+            bright_id[zone] = brightness_value(state.zone_brightness[zone]);
+            if (mode_id[zone] < 0 || color_id[zone] < 0 || bright_id[zone] < 0)
                 return -1;
         }
+        if (y720_apply_zones(mode_id, color_id, bright_id) != 0)
+            return -1;
     }
 
     update_lighting_toggle_button(1);
@@ -657,6 +803,7 @@ static void apply_all_zones(void)
 static void apply_keyboard_mode(void)
 {
     char mode[64], color[ZONE_COUNT][64], bright[ZONE_COUNT][32], status[256];
+    int mode_id[ZONE_COUNT], color_id[ZONE_COUNT], bright_id[ZONE_COUNT];
     int zone;
 
     if (!get_combo_value(g_globalMode, modes, (int)(sizeof(modes)/sizeof(modes[0])), mode, sizeof(mode))) {
@@ -670,11 +817,19 @@ static void apply_keyboard_mode(void)
             set_status("Please select colour and brightness for every zone.");
             return;
         }
+        mode_id[zone] = mode_value(mode);
+        color_id[zone] = color_value(color[zone]);
+        bright_id[zone] = brightness_value(bright[zone]);
+        if (mode_id[zone] < 0 || color_id[zone] < 0 || bright_id[zone] < 0) {
+            set_status("Invalid lighting settings.");
+            return;
+        }
     }
 
     set_status("Applying keyboard-wide mode while preserving zone settings...");
-    for (zone = 0; zone < ZONE_COUNT; ++zone) {
-        if (apply_zone_direct(zone, color[zone], bright[zone], mode) != 0) return;
+    if (y720_apply_zones(mode_id, color_id, bright_id) != 0) {
+        set_status("Unable to apply the selected keyboard mode.");
+        return;
     }
 
     snprintf(status, sizeof(status), "Keyboard mode: %s. Zone colours and brightness preserved.", friendly_mode(mode));
@@ -737,6 +892,7 @@ static void remember_current_on_state(void)
     }
 
     g_last_on_valid = 1;
+    save_last_on_state();
 }
 
 static void turn_on_from_last_state(void)
@@ -745,7 +901,12 @@ static void turn_on_from_last_state(void)
     char status[256];
 
     if (!g_last_on_valid) {
-        /* No in-memory state to restore; retain the existing simple fallback. */
+        /* No persisted pre-Off state is available; use Low as a safe fallback. */
+        select_combo_value(g_globalBrightness, "low", brightness,
+                           (int)(sizeof(brightness) / sizeof(brightness[0])));
+        for (zone = 0; zone < ZONE_COUNT; ++zone)
+            select_combo_value(g_zoneBrightness[zone], "low", brightness,
+                               (int)(sizeof(brightness) / sizeof(brightness[0])));
         apply_all_zones();
         return;
     }
@@ -756,11 +917,16 @@ static void turn_on_from_last_state(void)
         if (apply_all_direct(g_last_on_global_color, g_last_on_global_brightness, "smooth") != 0)
             return;
     } else {
+        int mode_id[ZONE_COUNT], color_id[ZONE_COUNT], bright_id[ZONE_COUNT];
         for (zone = 0; zone < ZONE_COUNT; ++zone) {
-            if (apply_zone_direct(zone, g_last_on_zone_color[zone],
-                                  g_last_on_zone_brightness[zone], g_last_on_mode) != 0)
+            mode_id[zone] = mode_value(g_last_on_mode);
+            color_id[zone] = color_value(g_last_on_zone_color[zone]);
+            bright_id[zone] = brightness_value(g_last_on_zone_brightness[zone]);
+            if (mode_id[zone] < 0 || color_id[zone] < 0 || bright_id[zone] < 0)
                 return;
         }
+        if (y720_apply_zones(mode_id, color_id, bright_id) != 0)
+            return;
     }
 
     select_combo_value(g_globalColor, g_last_on_global_color,
@@ -789,18 +955,10 @@ static void turn_off(void);
 
 static void toggle_lighting(void)
 {
-    char text[64];
-
-    if (!g_lightingToggle) {
+    if (g_lighting_on)
         turn_off();
-        return;
-    }
-
-    GetWindowTextA(g_lightingToggle, text, sizeof(text));
-    if (_stricmp(text, "Turn Lighting On") == 0)
-        turn_on_from_last_state();
     else
-        turn_off();
+        turn_on_from_last_state();
 }
 
 static void turn_off(void)
@@ -895,6 +1053,8 @@ static void apply_profile(void)
     set_status(status);
 
     if (apply_all_direct(color, bright, mode) == 0) {
+        if (_stricmp(bright, "off") != 0)
+            remember_current_on_state();
         select_combo_value(g_globalColor, color, colors, (int)(sizeof(colors)/sizeof(colors[0])));
         select_combo_value(g_globalBrightness, bright, brightness, (int)(sizeof(brightness)/sizeof(brightness[0])));
         select_combo_value(g_globalMode, mode, modes, (int)(sizeof(modes)/sizeof(modes[0])));
@@ -903,7 +1063,8 @@ static void apply_profile(void)
                  display_profile, friendly_color(color),
                  friendly_brightness(bright), friendly_mode(mode));
         set_status(status);
-        save_current_state(1, mode);
+        save_current_state(_stricmp(bright, "off") != 0, mode);
+        update_lighting_toggle_button(_stricmp(bright, "off") != 0);
     } else {
         set_status("Profile could not be applied.");
     }
@@ -994,8 +1155,18 @@ static void handle_fn_space(void *context)
 
     set_status("Fn + Space: changing brightness...");
 
-    for (zone = 0; zone < ZONE_COUNT; ++zone) {
-        if (apply_zone_direct(zone, zone_color[zone], next, mode) != 0)
+    {
+        int mode_id[ZONE_COUNT], color_id[ZONE_COUNT], bright_id[ZONE_COUNT];
+        for (zone = 0; zone < ZONE_COUNT; ++zone) {
+            mode_id[zone] = mode_value(mode);
+            color_id[zone] = color_value(zone_color[zone]);
+            bright_id[zone] = brightness_value(next);
+            if (mode_id[zone] < 0 || color_id[zone] < 0 || bright_id[zone] < 0) {
+                set_status("Fn + Space: invalid lighting settings.");
+                return;
+            }
+        }
+        if (y720_apply_zones(mode_id, color_id, bright_id) != 0)
             return;
     }
 
@@ -1029,6 +1200,8 @@ static void load_profiles(void)
     DWORD length;
     int i, j;
     g_profile_count = 0;
+    if (g_profile)
+        SendMessageA(g_profile, CB_RESETCONTENT, 0, 0);
 
     if (!get_config_path(config, sizeof(config))) return;
 
@@ -1059,7 +1232,6 @@ static void load_profiles(void)
         snprintf(g_profile_values[j + 1], sizeof(g_profile_values[j + 1]), "%s", key);
     }
 
-    SendMessageA(g_profile, CB_RESETCONTENT, 0, 0);
     for (i = 0; i < g_profile_count; ++i) {
         char display_profile[128];
         make_profile_label(g_profile_values[i], display_profile, sizeof(display_profile));
@@ -1101,7 +1273,7 @@ static LRESULT CALLBACK ProfileDialogProc(HWND hwnd, UINT message, WPARAM wParam
             create_label(hwnd, "Profile Name", 20, 20, 100, 24);
             g_profile_dialog.name = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                125, 18, 235, 26, hwnd, (HMENU)(INT_PTR)IDC_PROFILE_NAME,
+                SCALE(125), SCALE(18), SCALE(235), SCALE(26), hwnd, (HMENU)(INT_PTR)IDC_PROFILE_NAME,
                 GetModuleHandleA(NULL), NULL);
             SendMessageA(g_profile_dialog.name, WM_SETFONT, (WPARAM)g_font, TRUE);
             create_label(hwnd, "Colour", 20, 60, 100, 24);
@@ -1118,11 +1290,12 @@ static LRESULT CALLBACK ProfileDialogProc(HWND hwnd, UINT message, WPARAM wParam
             select_combo_value(g_profile_dialog.mode, "always_on", modes, mode_count);
             create_button(hwnd, "Save Profile", IDC_PROFILE_SAVE, 125, 185, 110, 30);
             create_button(hwnd, "Cancel", IDC_PROFILE_CANCEL, 250, 185, 110, 30);
+            SendMessageA(hwnd, DM_SETDEFID, IDC_PROFILE_SAVE, 0);
             return 0;
         }
         case WM_COMMAND:
-            if (LOWORD(wParam) == IDC_PROFILE_CANCEL) { profile_dialog_close(0); return 0; }
-            if (LOWORD(wParam) == IDC_PROFILE_SAVE) {
+            if (LOWORD(wParam) == IDCANCEL || LOWORD(wParam) == IDC_PROFILE_CANCEL) { profile_dialog_close(0); return 0; }
+            if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDC_PROFILE_SAVE) {
                 char name[128], color[64], bright[32], mode[64], config[MAX_PATH];
                 char display[128];
                 GetWindowTextA(g_profile_dialog.name, name, sizeof(name));
@@ -1167,12 +1340,20 @@ static int create_profile_dialog(HWND owner)
     ZeroMemory(&g_profile_dialog, sizeof(g_profile_dialog));
     g_profile_dialog.hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME, class_name, "Create Profile",
         WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 390, 260, owner, NULL, GetModuleHandleA(NULL), NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, SCALE(390), SCALE(260), owner, NULL, GetModuleHandleA(NULL), NULL);
     if (!g_profile_dialog.hwnd) return 0;
     EnableWindow(owner, FALSE);
     ShowWindow(g_profile_dialog.hwnd, SW_SHOW);
     SetForegroundWindow(g_profile_dialog.hwnd);
-    while (IsWindow(g_profile_dialog.hwnd) && GetMessageA(&msg, NULL, 0, 0) > 0) {
+    while (IsWindow(g_profile_dialog.hwnd)) {
+        int result = GetMessageA(&msg, NULL, 0, 0);
+        if (result == 0) {
+            PostQuitMessage((int)msg.wParam);
+            break;
+        }
+        if (result < 0) break;
+        if (IsDialogMessageA(g_profile_dialog.hwnd, &msg))
+            continue;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
@@ -1280,7 +1461,7 @@ static void exit_application(HWND hwnd)
 static HWND create_label(HWND parent, const char *text, int x, int y, int width, int height)
 {
     HWND hwnd = CreateWindowExA(0, "STATIC", text, WS_CHILD | WS_VISIBLE,
-                                x, y, width, height, parent, NULL,
+                                SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, NULL,
                                 GetModuleHandleA(NULL), NULL);
     if (hwnd) SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
     return hwnd;
@@ -1290,7 +1471,7 @@ static HWND create_group(HWND parent, const char *text, int x, int y, int width,
 {
     HWND hwnd = CreateWindowExA(0, "BUTTON", text,
                                 WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-                                x, y, width, height, parent, NULL,
+                                SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, NULL,
                                 GetModuleHandleA(NULL), NULL);
     if (hwnd) SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
     return hwnd;
@@ -1301,7 +1482,7 @@ static HWND create_combo(HWND parent, int id, int x, int y, int width, int heigh
     HWND hwnd = CreateWindowExA(WS_EX_CLIENTEDGE, "COMBOBOX", "",
                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                                 CBS_DROPDOWNLIST | WS_VSCROLL,
-                                x, y, width, height, parent, (HMENU)(INT_PTR)id,
+                                SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, (HMENU)(INT_PTR)id,
                                 GetModuleHandleA(NULL), NULL);
     if (hwnd) SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
     return hwnd;
@@ -1324,7 +1505,7 @@ static HWND create_button(HWND parent, const char *text, int id,
     if (is_accent_button(id)) style |= BS_OWNERDRAW;
 
     hwnd = CreateWindowExA(0, "BUTTON", text, style,
-                           x, y, width, height, parent, (HMENU)(INT_PTR)id,
+                           SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, (HMENU)(INT_PTR)id,
                            GetModuleHandleA(NULL), NULL);
     if (hwnd) SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
     return hwnd;
@@ -1378,7 +1559,7 @@ static void draw_button(const DRAWITEMSTRUCT *item)
 
     if (state & ODS_FOCUS) {
         RECT focus = rect;
-        InflateRect(&focus, -3, -3);
+        InflateRect(&focus, -SCALE(3), -SCALE(3));
         DrawFocusRect(item->hDC, &focus);
     }
 }
@@ -1419,10 +1600,10 @@ static void create_controls(HWND hwnd)
 
     create_group(hwnd, "Smooth Lighting", 25, 240, 800, 75);
     create_label(hwnd, "Cycles colours automatically, starting from the selected global colour and brightness.",
-                 45, 264, 600, 25);
-    create_button(hwnd, "Start Smooth", IDC_SMOOTH, 660, 258, 130, 30);
+                 45, 270, 600, 25);
+    create_button(hwnd, "Start Smooth", IDC_SMOOTH, 660, 265, 130, 30);
 
-    create_group(hwnd, "Individual Zone Colour and Brightness", 25, 330, 800, 245);
+    create_group(hwnd, "Individual Zone Colour and Brightness", 25, 330, 800, 235);
     create_label(hwnd, "Zone", 45, 360, 65, 22);
     create_label(hwnd, "Keyboard Area", 115, 360, 180, 22);
     create_label(hwnd, "Colour", 305, 360, 130, 22);
@@ -1446,27 +1627,31 @@ static void create_controls(HWND hwnd)
         create_button(hwnd, "Apply", IDC_ZONE_BASE + zone * 10 + 4, 650, y, 120, 27);
     }
 
-    create_group(hwnd, "Profiles", 25, 590, 800, 75);
-    create_label(hwnd, "Profile", 45, 616, 60, 24);
-    g_profile = create_combo(hwnd, IDC_PROFILE, 110, 612, 260, 300);
+    create_group(hwnd, "Profiles", 25, 580, 500, 115);
+    create_label(hwnd, "Profile", 45, 609, 60, 24);
+    g_profile = create_combo(hwnd, IDC_PROFILE, 110, 605, 390, 300);
     load_profiles();
-    create_button(hwnd, "Apply", IDC_APPLY_PROFILE, 380, 612, 85, 30);
-    create_button(hwnd, "New", IDC_PROFILE_NEW, 475, 612, 70, 30);
-    create_button(hwnd, "Delete", IDC_PROFILE_DELETE, 555, 612, 70, 30);
-    g_startup = CreateWindowExA(0, "BUTTON", "Start with Windows and Restore",
+    create_button(hwnd, "Apply", IDC_APPLY_PROFILE, 45, 645, 145, 30);
+    create_button(hwnd, "New", IDC_PROFILE_NEW, 200, 645, 145, 30);
+    create_button(hwnd, "Delete", IDC_PROFILE_DELETE, 355, 645, 145, 30);
+
+    create_group(hwnd, "Startup", 540, 580, 285, 115);
+    g_startup = CreateWindowExA(0, "BUTTON", "Start with Windows and Restore Last State",
                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                630, 612, 195, 30, hwnd, (HMENU)(INT_PTR)IDC_STARTUP,
+                                SCALE(555), SCALE(602), SCALE(255), SCALE(24), hwnd, (HMENU)(INT_PTR)IDC_STARTUP,
                                 GetModuleHandleA(NULL), NULL);
     if (g_startup) {
         SendMessageA(g_startup, WM_SETFONT, (WPARAM)g_font, TRUE);
         update_startup_checkbox();
     }
+    create_label(hwnd, "Fn + Space: Off -> Low -> Medium -> Ultra -> Off. Keep the GUI running in the tray for this shortcut to work.",
+                 555, 636, 255, 45);
 
     load_state_into_controls();
+    load_last_on_state();
 
-    create_label(hwnd, "Fn + Space: cycles Off -> Low -> Medium -> Ultra -> Off. The GUI must remain running in the system tray for this keyboard shortcut to work.", 30, 670, 795, 32);
-    create_label(hwnd, "Status", 30, 705, 55, 24);
-    g_status = create_label(hwnd, "Ready.", 85, 705, 740, 24);
+    create_label(hwnd, "Status", 30, 710, 55, 24);
+    g_status = create_label(hwnd, "Ready.", 85, 710, 740, 24);
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -1488,8 +1673,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_INPUT:
-            if (y720_input_handle_message(message, wParam, lParam))
+        case WM_INPUT_DEVICE_CHANGE:
+            if (y720_input_handle_message(message, wParam, lParam)) {
+                if (message == WM_INPUT)
+                    return DefWindowProcA(hwnd, message, wParam, lParam);
                 return 0;
+            }
             break;
 
         case WM_COMMAND: {
@@ -1579,6 +1768,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command_line, i
     MSG message;
     int startup_launch = 0;
     (void)previous;
+    init_dpi_scaling();
     if (command_line && strstr(command_line, "--startup"))
         startup_launch = 1;
 
@@ -1597,10 +1787,10 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command_line, i
     if (!g_appIcon) g_appIcon = LoadIconA(NULL, IDI_APPLICATION);
     g_taskbarCreated = RegisterWindowMessageA("TaskbarCreated");
 
-    g_font = CreateFontA(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    g_font = CreateFontA(SCALE(16), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                          DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
-    g_fontBold = CreateFontA(21, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    g_fontBold = CreateFontA(SCALE(21), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                              DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
 
@@ -1622,38 +1812,14 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command_line, i
 
     g_hWnd = CreateWindowExA(0, CLASS_NAME, APP_TITLE,
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                             CW_USEDEFAULT, CW_USEDEFAULT, 865, 770,
+                             CW_USEDEFAULT, CW_USEDEFAULT, SCALE(865), SCALE(770),
                              NULL, NULL, instance, NULL);
     if (!g_hWnd) {
         MessageBoxA(NULL, "Unable to create GUI window.", APP_TITLE, MB_ICONERROR);
         return 1;
     }
 
-    {
-        POINT cursor_point;
-        HMONITOR monitor;
-        MONITORINFO monitor_info;
-        RECT window_rect;
-        int width, height;
-        int x, y;
-
-        if (GetCursorPos(&cursor_point)) {
-            monitor = MonitorFromPoint(cursor_point, MONITOR_DEFAULTTONEAREST);
-            ZeroMemory(&monitor_info, sizeof(monitor_info));
-            monitor_info.cbSize = sizeof(monitor_info);
-            if (GetMonitorInfoA(monitor, &monitor_info) &&
-                GetWindowRect(g_hWnd, &window_rect)) {
-                width = window_rect.right - window_rect.left;
-                height = window_rect.bottom - window_rect.top;
-                x = monitor_info.rcWork.left +
-                    (monitor_info.rcWork.right - monitor_info.rcWork.left - width) / 2;
-                y = monitor_info.rcWork.top +
-                    (monitor_info.rcWork.bottom - monitor_info.rcWork.top - height) / 2;
-                SetWindowPos(g_hWnd, NULL, x, y, 0, 0,
-                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-            }
-        }
-    }
+    center_window_on_active_monitor(g_hWnd);
 
     if (g_appIcon) {
         SendMessageA(g_hWnd, WM_SETICON, ICON_BIG, (LPARAM)g_appIcon);

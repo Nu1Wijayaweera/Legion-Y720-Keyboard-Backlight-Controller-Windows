@@ -256,11 +256,6 @@ int send_feature(
             report,
             REPORT_LENGTH)) {
 
-        printf(
-            "HidD_SetFeature failed: %lu\n",
-            GetLastError()
-        );
-
         return -1;
     }
 
@@ -366,12 +361,6 @@ int apply_one_zone(
     if (zone < 0 ||
         zone >= ZONE_COUNT) {
 
-        printf(
-            "Invalid zone: %d\n"
-            "Valid zones are 0, 1, 2 and 3.\n",
-            zone
-        );
-
         return -1;
     }
 
@@ -423,6 +412,30 @@ int y720_apply_zone(int zone, int mode, int color, int brightness)
     result = apply_one_zone(device, zone, mode, color, brightness);
     CloseHandle(device);
     return result;
+}
+
+int y720_apply_zones(const int *modes, const int *colors, const int *brightness)
+{
+    HANDLE device;
+    int zone;
+
+    if (!modes || !colors || !brightness)
+        return -1;
+
+    device = find_y720();
+    if (device == INVALID_HANDLE_VALUE)
+        return -1;
+
+    for (zone = 0; zone < ZONE_COUNT; ++zone) {
+        if (set_zone(device, modes[zone], colors[zone], brightness[zone], zone) < 0) {
+            CloseHandle(device);
+            return -1;
+        }
+    }
+
+    zone = apply_final(device);
+    CloseHandle(device);
+    return zone;
 }
 
 int y720_turn_off(void)

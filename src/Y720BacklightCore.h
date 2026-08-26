@@ -29,6 +29,7 @@ int apply_one_zone(HANDLE device, int zone, int mode, int color, int brightness)
 /* High-level helpers: open the Y720 HID device, perform the operation, and close it. */
 int y720_apply_all(int mode, int color, int brightness);
 int y720_apply_zone(int zone, int mode, int color, int brightness);
+int y720_apply_zones(const int *modes, const int *colors, const int *brightness);
 int y720_turn_off(void);
 
 #ifdef __cplusplus

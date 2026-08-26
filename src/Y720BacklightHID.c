@@ -19,15 +19,22 @@ static Y720FnSpaceCallback g_callback = NULL;
 static void *g_context = NULL;
 static int g_initialized = 0;
 static int g_pressed = 0;
+static HANDLE g_cached_device = NULL;
+static int g_cached_device_valid = 0;
+static int g_cached_device_match = 0;
 
 static int is_y720_consumer_device(HANDLE device)
 {
     UINT size = 0;
     RID_DEVICE_INFO info;
     char *name = NULL;
+    int matched;
 
     if (!device || device == INVALID_HANDLE_VALUE)
         return 0;
+
+    if (g_cached_device_valid && g_cached_device == device)
+        return g_cached_device_match;
 
     ZeroMemory(&info, sizeof(info));
     info.cbSize = sizeof(info);
@@ -37,14 +44,16 @@ static int is_y720_consumer_device(HANDLE device)
                                &info, &size) == (UINT)-1)
         return 0;
 
-    if (info.dwType != RIM_TYPEHID)
-        return 0;
-
-    if (info.hid.dwVendorId != Y720_INPUT_VID ||
+    if (info.dwType != RIM_TYPEHID ||
+        info.hid.dwVendorId != Y720_INPUT_VID ||
         info.hid.dwProductId != Y720_INPUT_PID ||
         info.hid.usUsagePage != Y720_INPUT_USAGE_PAGE ||
-        info.hid.usUsage != Y720_INPUT_USAGE)
+        info.hid.usUsage != Y720_INPUT_USAGE) {
+        g_cached_device = device;
+        g_cached_device_valid = 1;
+        g_cached_device_match = 0;
         return 0;
+    }
 
     /*
      * Windows identifies the keyboard's consumer-control collection as
@@ -66,14 +75,15 @@ static int is_y720_consumer_device(HANDLE device)
     }
 
     name[size] = '\0';
+    matched = strstr(name, "VID_048D&PID_C100&Col04") != NULL ||
+              strstr(name, "VID_048d&PID_C100&Col04") != NULL ||
+              strstr(name, "VID_048D&PID_C100&COL04") != NULL;
+    free(name);
 
-    {
-        int matched = strstr(name, "VID_048D&PID_C100&Col04") != NULL ||
-                      strstr(name, "VID_048d&PID_C100&Col04") != NULL ||
-                      strstr(name, "VID_048D&PID_C100&COL04") != NULL;
-        free(name);
-        return matched;
-    }
+    g_cached_device = device;
+    g_cached_device_valid = 1;
+    g_cached_device_match = matched;
+    return matched;
 }
 
 static void process_raw_input(HRAWINPUT raw_input)
@@ -147,7 +157,7 @@ int y720_input_init(HWND hwnd, Y720FnSpaceCallback callback, void *context)
 
     device.usUsagePage = Y720_INPUT_USAGE_PAGE;
     device.usUsage = Y720_INPUT_USAGE;
-    device.dwFlags = RIDEV_INPUTSINK;
+    device.dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY;
     device.hwndTarget = hwnd;
 
     if (!RegisterRawInputDevices(&device, 1, sizeof(device)))
@@ -166,7 +176,15 @@ int y720_input_handle_message(UINT message, WPARAM wParam, LPARAM lParam)
 {
     (void)wParam;
 
-    if (message != WM_INPUT || !g_initialized)
+    if (!g_initialized)
+        return 0;
+
+    if (message == WM_INPUT_DEVICE_CHANGE) {
+        g_cached_device_valid = 0;
+        return 1;
+    }
+
+    if (message != WM_INPUT)
         return 0;
 
     process_raw_input((HRAWINPUT)lParam);
@@ -182,6 +200,9 @@ void y720_input_shutdown(void)
      */
     g_initialized = 0;
     g_pressed = 0;
+    g_cached_device = NULL;
+    g_cached_device_valid = 0;
+    g_cached_device_match = 0;
     g_callback = NULL;
     g_context = NULL;
     g_hwnd = NULL;
