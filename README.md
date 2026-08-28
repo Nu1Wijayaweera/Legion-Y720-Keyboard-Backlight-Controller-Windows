@@ -1,7 +1,7 @@
 # Legion Y720 Keyboard Backlight Controller for Windows
 
 <p align="center">
-  <img src="assets/github-social-preview.png" alt="Legion Y720 Keyboard Backlight Controller" width="850">
+  <img src="assets/github-social-preview.jpg" alt="Legion Y720 Keyboard Backlight Controller" width="850">
 </p>
 
 <p align="center">
@@ -20,22 +20,34 @@ The controller communicates directly with the keyboard through the
 Windows HID API and does not require Lenovo's proprietary lighting
 software.
 
+## Download
+
+The latest release includes the standalone Windows executable and does
+not require an installer.
+
+- **[Download Latest Release](../../releases/latest)**
+- **[View All Releases](../../releases)**
+- **[Download Source Code](../../archive/HEAD.zip)**
+
 ## Features
 
 -   Native Windows GUI
+-   DPI-aware GUI layout
 -   Four-zone independent colour control
 -   Four-zone independent brightness control
+-   Visual colour and brightness selectors
 -   Keyboard-wide lighting modes
 -   Smooth colour cycling
 -   Profiles stored in an INI configuration file
 -   Create and delete profiles from the GUI
--   System-tray integration
--   Tray controls for turning lighting on and off
 -   Persistent lighting state
 -   Restore the previous lighting state when Windows starts
 -   Optional Start with Windows setting
 -   Fn + Space keyboard shortcut
+-   System-tray integration
+-   Tray controls for turning lighting on and off
 -   Single-instance application
+-   Built-in uninstall and cleanup
 -   No installer required
 -   No background service required
 -   No administrator privileges required
@@ -85,6 +97,9 @@ Profiles can contain:
 
 Profiles can be applied, created and deleted directly from the GUI.
 
+No predefined profiles are included with the release. Users can create
+their own profiles when needed.
+
 ## Fn + Space
 
 The controller implements the classic Legion-style:
@@ -115,8 +130,8 @@ for this functionality.
 
 ## Persistent State
 
-The controller saves the current lighting state so that it can be
-restored when Windows starts.
+The controller saves the last-on lighting state so that it can be
+restored when the application is restarted or Windows starts.
 
 The saved state includes the configured zone lighting and other relevant
 controller state.
@@ -127,6 +142,9 @@ restore the previous lighting state automatically.
 Normal Windows startup restoration occurs after the user session starts.
 The application does not install a Windows service or require
 administrator privileges solely for pre-login lighting control.
+
+Turning lighting off does not discard the saved lighting configuration.
+Turning it back on restores the previous state.
 
 ## System Tray
 
@@ -150,6 +168,14 @@ Only one instance of the controller can run at a time.
 
 Launching the application again while it is already running brings the
 existing instance to the foreground instead of starting a second copy.
+
+## Uninstall
+
+The application includes an **Uninstall** function in the GUI.
+
+The uninstall process removes the application's configuration and
+startup settings and cleans up the application files without requiring a
+separate installer or administrator-level uninstaller.
 
 ## Compatibility
 
@@ -186,9 +212,10 @@ Please include:
 
 No installer is required.
 
-Place the release executable in a convenient location and run:
+Download the latest release, extract the release package, place the
+executable in a convenient location, and run:
 
-``` text
+```text
 Y720BacklightGUI.exe
 ```
 
@@ -206,14 +233,15 @@ The program does not require:
 
 ## Configuration
 
-Profiles and persistent configuration are stored using an INI
-configuration file.
+The application stores profiles and persistent settings in an INI
+configuration file managed by the program.
 
-The configuration file can be kept alongside the application according
-to the supplied release folder structure.
+Users normally do not need to create or edit this file manually. Profiles
+can be created, applied, and deleted directly from the GUI.
 
-The application manages profile creation and deletion through the GUI,
-so users do not normally need to edit the INI file manually.
+No predefined profiles configuration is included with the release. A
+fresh installation therefore starts without user profiles, and users can
+create profiles only when they need them.
 
 ## Building from Source
 
@@ -269,9 +297,6 @@ src/
 resources/
     keyboard.ico
 
-config/
-    Y720Backlight.ini
-
 build/
     (generated build output)
 ```
@@ -293,6 +318,10 @@ It does not install:
 The application communicates with the keyboard using the Windows HID
 interface and performs its normal configuration and persistence tasks
 from user space.
+
+Configuration, profile names, paths, and startup settings are validated
+and parsed defensively to reduce the risk of malformed or unexpected
+input causing unintended behaviour.
 
 ## Why This Project Exists
 
