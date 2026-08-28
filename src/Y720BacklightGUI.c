@@ -24,6 +24,7 @@
 #define IDC_ZONE_BASE          2000
 #define IDC_STATUS             3000
 #define IDC_STARTUP            3001
+#define IDC_UNINSTALL          3002
 #define IDC_PROFILE_NEW        3010
 #define IDC_PROFILE_DELETE     3011
 #define IDC_PROFILE_DIALOG     3100
@@ -70,6 +71,42 @@ static int g_config_path_initialized = 0;
    persistent Off state or complicating the normal lighting path. */
 static int g_last_on_valid = 0;
 
+/* Legion-style dark charcoal/red accent palette. */
+#define CLR_BG        RGB(18,18,20)
+#define CLR_PANEL     RGB(27,27,30)
+#define CLR_CONTROL   RGB(35,35,39)
+#define CLR_TEXT      RGB(235,235,238)
+#define CLR_MUTED     RGB(170,170,176)
+#define CLR_RED       RGB(220,30,45)
+#define CLR_RED_DARK  RGB(145,20,30)
+#define CLR_BUTTON    RGB(38,38,42)
+#define CLR_BUTTON_EDGE RGB(70,70,75)
+
+/* Layout constants for create_controls() */
+#define LAYOUT_MARGIN_X           25
+#define LAYOUT_MARGIN_Y           18
+#define LAYOUT_CONTROL_HEIGHT     24
+#define LAYOUT_CONTROL_WIDTH      60
+#define LAYOUT_COMBO_WIDTH        130
+#define LAYOUT_COMBO_WIDTH_LONG   210
+#define LAYOUT_BUTTON_HEIGHT      30
+#define LAYOUT_BUTTON_HEIGHT_MED  34
+#define LAYOUT_BUTTON_WIDTH       130
+#define LAYOUT_BUTTON_WIDTH_LONG  180
+#define LAYOUT_BUTTON_WIDTH_XLONG 235
+#define LAYOUT_BUTTON_WIDTH_MAX   300
+#define LAYOUT_GROUP_HEIGHT       145
+#define LAYOUT_GROUP_HEIGHT_SMALL 75
+#define LAYOUT_GROUP_HEIGHT_MED   115
+#define LAYOUT_GROUP_HEIGHT_LARGE 235
+#define LAYOUT_GROUP_WIDTH        490
+#define LAYOUT_GROUP_WIDTH_FULL   800
+#define LAYOUT_WINDOW_WIDTH       860
+#define LAYOUT_WINDOW_HEIGHT      770
+#define LAYOUT_DPI_MIN            96
+#define LAYOUT_DPI_MAX            480
+#define LAYOUT_FOCUS_INSET        3
+
 static void update_lighting_toggle_button(int lighting_on)
 {
     g_lighting_on = lighting_on ? 1 : 0;
@@ -79,12 +116,29 @@ static void update_lighting_toggle_button(int lighting_on)
 
 #define SCALE(value) MulDiv((value), g_dpi, 96)
 
+/* Forward declarations for control helper functions (kept near the top for readability) */
+static HWND create_label(HWND parent, const char *text, int x, int y, int width, int height);
+static HWND create_combo(HWND parent, int id, int x, int y, int width, int height);
+static HWND create_button(HWND parent, const char *text, int id, int x, int y, int width, int height);
+static void load_profiles(void);
+
+/* New forward declarations for owner-drawn colour combobox support */
+static HWND create_color_combo(HWND parent, int id, int x, int y, int width, int height);
+static int is_color_combo_hwnd(HWND hwnd);
+static void draw_color_combobox(const DRAWITEMSTRUCT *item);
+
+/* Brightness combo helpers */
+static HWND create_brightness_combo(HWND parent, int id, int x, int y, int width, int height);
+static int is_brightness_combo_hwnd(HWND hwnd);
+static void draw_brightness_combobox(const DRAWITEMSTRUCT *item);
+
+
 static void init_dpi_scaling(void)
 {
     HMODULE user32;
     FARPROC set_process_dpi_aware_proc;
     BOOL (WINAPI *set_process_dpi_aware)(void) = NULL;
-    HDC dc;
+    HDC dc = NULL;
 
     user32 = GetModuleHandleA("user32.dll");
     set_process_dpi_aware_proc = user32 ?
@@ -104,7 +158,8 @@ static void init_dpi_scaling(void)
     dc = GetDC(NULL);
     if (dc) {
         int dpi = GetDeviceCaps(dc, LOGPIXELSX);
-        if (dpi > 0) g_dpi = dpi;
+        /* Validate DPI range - typical values are 96-480 */
+        if (dpi >= LAYOUT_DPI_MIN && dpi <= LAYOUT_DPI_MAX) g_dpi = dpi;
         ReleaseDC(NULL, dc);
     }
 }
@@ -139,17 +194,6 @@ static char g_last_on_global_brightness[32];
 static char g_last_on_zone_color[ZONE_COUNT][64];
 static char g_last_on_zone_brightness[ZONE_COUNT][32];
 
-/* Legion-style dark charcoal/red accent palette. */
-#define CLR_BG        RGB(18,18,20)
-#define CLR_PANEL     RGB(27,27,30)
-#define CLR_CONTROL   RGB(35,35,39)
-#define CLR_TEXT      RGB(235,235,238)
-#define CLR_MUTED     RGB(170,170,176)
-#define CLR_RED       RGB(220,30,45)
-#define CLR_RED_DARK  RGB(145,20,30)
-#define CLR_BUTTON    RGB(38,38,42)
-#define CLR_BUTTON_EDGE RGB(70,70,75)
-
 static const char *colors[] = {
     "azure_radiance", "blue", "blue_ribbon", "bright_green",
     "crimson", "cyan", "electric_violet", "electric_violet_2",
@@ -164,6 +208,34 @@ static const char *color_labels[] = {
     "Green", "Hollywood Cerise", "International Orange", "Lime",
     "Magenta", "No Color", "Spring Green", "Spring Green 2",
     "Torch Red", "Web Orange", "White", "Yellow"
+};
+
+/* Conservative approximate RGB swatches aligned with the order in colors[].
+   These are visual hints only and are not authoritative OEM values. Keep the
+   array length equal to the colours[] array above. */
+static const COLORREF color_map[] = {
+    /* Updated conservative mapping based on the list you provided, with a
+       slightly more bluish tint for the electric violet entries as requested. */
+    RGB(0,127,255),   /* azure_radiance  #007FFF */
+    RGB(0,0,255),     /* blue            #0000FF */
+    RGB(0,102,255),   /* blue_ribbon     #0066FF */
+    RGB(0,255,0),     /* bright_green    #00FF00 */
+    RGB(220,20,60),   /* crimson         #DC143C */
+    RGB(0,255,255),   /* cyan            #00FFFF */
+    RGB(100,0,255),   /* electric_violet (tuned slightly bluish, approx) */
+    RGB(120,0,255),   /* electric_violet_2 (tuned slightly bluish, approx) */
+    RGB(0,255,0),     /* green           #00FF00 */
+    RGB(244,0,161),   /* hollywood_cerise#F400A1 */
+    RGB(255,79,0),    /* international_orange #FF4F00 */
+    RGB(190,255,0),   /* lime (adjusted back to previous conservative mapping) */
+    RGB(255,0,255),   /* magenta         #FF00FF */
+    RGB(40,40,40),    /* nocolor (render as dark/empty) */
+    RGB(0,255,127),   /* spring_green    #00FF7F */
+    RGB(0,238,118),   /* spring_green_2  #00EE76 */
+    RGB(253,14,53),   /* torch_red       #FD0E35 */
+    RGB(255,165,0),   /* web_orange      #FFA500 */
+    RGB(255,255,255), /* white           #FFFFFF */
+    RGB(240,255,0)    /* yellow (less orangish) */
 };
 
 static const char *brightness[] = { "off", "low", "medium", "high", "ultra", "enough" };
@@ -282,6 +354,44 @@ static void trim(char *s)
     end = s + strlen(s);
     while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) --end;
     *end = '\0';
+}
+
+static int is_valid_profile_name(const char *name)
+{
+    int i, len;
+    if (!name) return 0;
+    
+    len = (int)strlen(name);
+    if (len == 0 || len > 64) return 0;
+    
+    /* Check for leading/trailing spaces */
+    if (name[0] == ' ' || name[len - 1] == ' ') return 0;
+    
+    /* Check for dangerous characters */
+    for (i = 0; i < len; ++i) {
+        unsigned char c = (unsigned char)name[i];
+        if (c < 32 || c == 127) return 0; /* Control characters */
+        if (c == '[' || c == ']' || c == '=' || c == '\\' || c == '/' || 
+            c == '"' || c == ';' || c == ':' || c == '*' || c == '?' || 
+            c == '<' || c == '>' || c == '|') return 0;
+    }
+    
+    return 1;
+}
+
+static int safe_atoi(const char *str, int min_val, int max_val, int *result)
+{
+    char *endptr;
+    long val;
+    
+    if (!str || !result) return 0;
+    
+    val = strtol(str, &endptr, 10);
+    if (endptr == str || *endptr != '\0') return 0; /* Not a valid number */
+    if (val < min_val || val > max_val) return 0; /* Out of range */
+    
+    *result = (int)val;
+    return 1;
 }
 
 static int get_exe_directory(char *buffer, DWORD buffer_size)
@@ -477,6 +587,7 @@ static int get_startup_command_value(char *buffer, DWORD buffer_size)
     DWORD type = 0, size = buffer_size;
     const char *run_key = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
     const char *value_name = "LegionY720Backlight";
+    int i;
 
     if (!buffer || !buffer_size) return 0;
     buffer[0] = '\0';
@@ -486,6 +597,14 @@ static int get_startup_command_value(char *buffer, DWORD buffer_size)
     RegCloseKey(key);
     if (result != ERROR_SUCCESS || type != REG_SZ || !buffer[0]) return 0;
     buffer[buffer_size - 1] = '\0';
+    
+    /* Basic validation: check for suspicious characters that could indicate injection */
+    for (i = 0; buffer[i]; ++i) {
+        unsigned char c = (unsigned char)buffer[i];
+        if (c < 32 || c == 127) return 0; /* Control characters */
+        if (c == '|' || c == '&' || c == ';' || c == '`' || c == '$') return 0; /* Command injection chars */
+    }
+    
     return 1;
 }
 
@@ -536,6 +655,39 @@ static int set_startup_enabled(int enabled)
 
     RegCloseKey(key);
     return result == ERROR_SUCCESS;
+}
+
+/*
+ * Perform uninstall: prompt user, turn off lighting, clear startup entry,
+ * delete configuration and state files, attempt to remove the appdata folder,
+ * and schedule a background batch that deletes the executable after exit.
+ */
+#include "uninstall.h"
+
+/* Forward declarations used by perform_uninstall to avoid implicit declarations */
+static void turn_off(void);
+static void exit_application(HWND hwnd);
+static void draw_button(const DRAWITEMSTRUCT *item);
+
+static void perform_uninstall(HWND hwnd)
+{
+    if (MessageBoxA(hwnd,
+                     "This will uninstall Legion Y720 Keyboard Backlight Controller.\r\n\r\nIt will remove startup entries, saved settings, and attempt to delete the application files.\r\n\r\nDo you want to continue?",
+                     "Uninstall and Clear Residues", MB_YESNO | MB_ICONWARNING) != IDYES) {
+        return;
+    }
+
+    /* Try to turn lighting off (best-effort) */
+    turn_off();
+
+    set_status("Uninstalling: clearing startup entry and saved state...");
+
+    /* Delegate the heavy lifting to the uninstall module (keeps GUI file smaller). */
+    uninstall_schedule_and_cleanup(hwnd);
+
+    set_status("Uninstall scheduled. Exiting...");
+    /* Exit the application so the scheduled batch can delete the executable */
+    exit_application(hwnd);
 }
 
 static void save_state_values(int enabled, const char *mode,
@@ -600,7 +752,10 @@ static void load_last_on_state(void)
     g_last_on_valid = 0;
     if (!get_state_path(path, sizeof(path))) return;
     GetPrivateProfileStringA("last_on", "valid", "0", value, sizeof(value), path);
-    if (atoi(value) != 1) return;
+    {
+        int valid_flag;
+        if (!safe_atoi(value, 0, 1, &valid_flag) || valid_flag != 1) return;
+    }
 
     GetPrivateProfileStringA("last_on", "mode", "always_on", g_last_on_mode, sizeof(g_last_on_mode), path);
     GetPrivateProfileStringA("last_on", "global_color", "crimson", g_last_on_global_color, sizeof(g_last_on_global_color), path);
@@ -663,13 +818,20 @@ static int load_saved_state(saved_state_t *state)
 
     GetPrivateProfileStringA("state", "valid", "0",
                              value, sizeof(value), path);
-    if (atoi(value) != 1) return 0;
+    {
+        int valid_flag;
+        if (!safe_atoi(value, 0, 1, &valid_flag) || valid_flag != 1) return 0;
+    }
 
     state->valid = 1;
 
     GetPrivateProfileStringA("state", "enabled", "1",
                              value, sizeof(value), path);
-    state->enabled = atoi(value) != 0;
+    {
+        int enabled_flag;
+        if (!safe_atoi(value, 0, 1, &enabled_flag)) return 0;
+        state->enabled = enabled_flag != 0;
+    }
 
     GetPrivateProfileStringA("state", "mode", "always_on",
                              state->mode, sizeof(state->mode), path);
@@ -851,12 +1013,11 @@ static void apply_smooth(void)
     set_status("Starting Smooth lighting from the selected colour...");
 
     if (apply_all_direct(color, bright, "smooth") == 0) {
-        char *display = NULL;
+        const char *display = NULL;
         int i;
-        (void)display;
         sync_zone_color_brightness(color, bright);
         for (i = 0; i < (int)(sizeof(color_labels)/sizeof(color_labels[0])); ++i)
-            if (_stricmp(colors[i], color) == 0) display = (char *)color_labels[i];
+            if (_stricmp(colors[i], color) == 0) display = color_labels[i];
         snprintf(status, sizeof(status), "Smooth lighting started from %s / %s.", display ? display : friendly_color(color), friendly_brightness(bright));
         set_status(status);
         save_current_state(1, "smooth");
@@ -1209,12 +1370,22 @@ static void load_profiles(void)
     length = GetPrivateProfileStringA(NULL, NULL, "", profiles, sizeof(profiles), config);
     if (!length) return;
 
+    /* Check if the buffer was too small to hold all profiles */
+    if (length >= sizeof(profiles) - 2) {
+        set_status("Warning: Profile list may be truncated. Consider reducing number of profiles.");
+    }
+
     p = profiles;
     while (*p && g_profile_count < MAX_PROFILES) {
         snprintf(g_profile_values[g_profile_count],
                  sizeof(g_profile_values[g_profile_count]), "%s", p);
         ++g_profile_count;
         p += strlen(p) + 1;
+    }
+
+    /* Warn if we hit the profile limit */
+    if (g_profile_count >= MAX_PROFILES && *p) {
+        set_status("Warning: Maximum number of profiles reached. Some profiles may not be loaded.");
     }
 
     for (i = 1; i < g_profile_count; ++i) {
@@ -1239,14 +1410,6 @@ static void load_profiles(void)
     }
     if (g_profile_count > 0) SendMessageA(g_profile, CB_SETCURSEL, 0, 0);
 }
-
-
-
-static HWND create_label(HWND parent, const char *text, int x, int y, int width, int height);
-static HWND create_combo(HWND parent, int id, int x, int y, int width, int height);
-static HWND create_button(HWND parent, const char *text, int id, int x, int y, int width, int height);
-static void load_profiles(void);
-
 typedef struct {
     HWND hwnd;
     HWND name, color, bright, mode;
@@ -1270,29 +1433,68 @@ static LRESULT CALLBACK ProfileDialogProc(HWND hwnd, UINT message, WPARAM wParam
             int color_count = (int)(sizeof(colors) / sizeof(colors[0]));
             int bright_count = (int)(sizeof(brightness) / sizeof(brightness[0]));
             int mode_count = (int)(sizeof(modes) / sizeof(modes[0]));
-            create_label(hwnd, "Profile Name", 20, 20, 100, 24);
+            create_label(hwnd, "Profile Name", 20, 20, 100, LAYOUT_CONTROL_HEIGHT);
             g_profile_dialog.name = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                 SCALE(125), SCALE(18), SCALE(235), SCALE(26), hwnd, (HMENU)(INT_PTR)IDC_PROFILE_NAME,
                 GetModuleHandleA(NULL), NULL);
             SendMessageA(g_profile_dialog.name, WM_SETFONT, (WPARAM)g_font, TRUE);
-            create_label(hwnd, "Colour", 20, 60, 100, 24);
-            g_profile_dialog.color = create_combo(hwnd, IDC_PROFILE_COLOR, 125, 56, 235, 300);
+            create_label(hwnd, "Colour", 20, 60, 100, LAYOUT_CONTROL_HEIGHT);
+            g_profile_dialog.color = create_color_combo(hwnd, IDC_PROFILE_COLOR, 125, 56, 235, 300);
             add_combo_items(g_profile_dialog.color, color_labels, color_count);
             select_combo_value(g_profile_dialog.color, "crimson", colors, color_count);
-            create_label(hwnd, "Brightness", 20, 100, 100, 24);
-            g_profile_dialog.bright = create_combo(hwnd, IDC_PROFILE_BRIGHTNESS, 125, 96, 235, 300);
+            create_label(hwnd, "Brightness", 20, 100, 100, LAYOUT_CONTROL_HEIGHT);
+            g_profile_dialog.bright = create_brightness_combo(hwnd, IDC_PROFILE_BRIGHTNESS, 125, 96, 235, 300);
             add_combo_items(g_profile_dialog.bright, brightness_labels, bright_count);
             select_combo_value(g_profile_dialog.bright, "high", brightness, bright_count);
-            create_label(hwnd, "Mode", 20, 140, 100, 24);
+            create_label(hwnd, "Mode", 20, 140, 100, LAYOUT_CONTROL_HEIGHT);
             g_profile_dialog.mode = create_combo(hwnd, IDC_PROFILE_MODE, 125, 136, 235, 300);
             add_combo_items(g_profile_dialog.mode, mode_labels, mode_count);
             select_combo_value(g_profile_dialog.mode, "always_on", modes, mode_count);
-            create_button(hwnd, "Save Profile", IDC_PROFILE_SAVE, 125, 185, 110, 30);
-            create_button(hwnd, "Cancel", IDC_PROFILE_CANCEL, 250, 185, 110, 30);
+            create_button(hwnd, "Save Profile", IDC_PROFILE_SAVE, 90, 185, LAYOUT_BUTTON_WIDTH, LAYOUT_BUTTON_HEIGHT);
+            create_button(hwnd, "Cancel", IDC_PROFILE_CANCEL, 230, 185, LAYOUT_BUTTON_WIDTH, LAYOUT_BUTTON_HEIGHT);
             SendMessageA(hwnd, DM_SETDEFID, IDC_PROFILE_SAVE, 0);
             return 0;
         }
+
+        /* Ensure controls match the main window's theme by handling control color messages */
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN: {
+            HDC dc = (HDC)wParam;
+            SetTextColor(dc, CLR_TEXT);
+            SetBkColor(dc, CLR_BG);
+            if (message == WM_CTLCOLORBTN) return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+            return (LRESULT)g_bgBrush;
+        }
+
+        case WM_MEASUREITEM: {
+            MEASUREITEMSTRUCT *mis = (MEASUREITEMSTRUCT *)lParam;
+            if (mis && mis->CtlType == ODT_COMBOBOX) {
+                mis->itemHeight = SCALE(24);
+            }
+            return TRUE;
+        }
+
+        case WM_DRAWITEM: {
+            const DRAWITEMSTRUCT *dis = (const DRAWITEMSTRUCT *)lParam;
+            if (dis && dis->CtlType == ODT_COMBOBOX && is_color_combo_hwnd(dis->hwndItem)) {
+                draw_color_combobox(dis);
+                return TRUE;
+            } else if (dis) {
+                draw_button(dis);
+                return TRUE;
+            }
+            return TRUE;
+        }
+
+        case WM_CTLCOLORLISTBOX:
+        case WM_CTLCOLOREDIT: {
+            HDC dc = (HDC)wParam;
+            SetTextColor(dc, CLR_TEXT);
+            SetBkColor(dc, CLR_CONTROL);
+            return (LRESULT)g_controlBrush;
+        }
+
         case WM_COMMAND:
             if (LOWORD(wParam) == IDCANCEL || LOWORD(wParam) == IDC_PROFILE_CANCEL) { profile_dialog_close(0); return 0; }
             if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDC_PROFILE_SAVE) {
@@ -1300,11 +1502,9 @@ static LRESULT CALLBACK ProfileDialogProc(HWND hwnd, UINT message, WPARAM wParam
                 char display[128];
                 GetWindowTextA(g_profile_dialog.name, name, sizeof(name));
                 trim(name);
-                if (!name[0]) { MessageBoxA(hwnd, "Please enter a profile name.", "Profile", MB_ICONWARNING); return 0; }
-                for (int i = 0; name[i]; ++i) {
-                    if (name[i] == '[' || name[i] == ']' || name[i] == '=' || name[i] == '\\' || name[i] == '/' || name[i] == '"') {
-                        MessageBoxA(hwnd, "Profile name contains an unsupported character.", "Profile", MB_ICONWARNING); return 0;
-                    }
+                if (!is_valid_profile_name(name)) { 
+                    MessageBoxA(hwnd, "Profile name must be 1-64 characters and cannot contain special characters: [ ] = \\ / \" ; : * ? < > |", "Profile", MB_ICONWARNING); 
+                    return 0; 
                 }
                 if (!get_combo_value(g_profile_dialog.color, colors, (int)(sizeof(colors)/sizeof(colors[0])), color, sizeof(color)) ||
                     !get_combo_value(g_profile_dialog.bright, brightness, (int)(sizeof(brightness)/sizeof(brightness[0])), bright, sizeof(bright) ) ||
@@ -1341,7 +1541,10 @@ static int create_profile_dialog(HWND owner)
     g_profile_dialog.hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME, class_name, "Create Profile",
         WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, SCALE(390), SCALE(260), owner, NULL, GetModuleHandleA(NULL), NULL);
-    if (!g_profile_dialog.hwnd) return 0;
+    if (!g_profile_dialog.hwnd) {
+        EnableWindow(owner, TRUE);
+        return 0;
+    }
     EnableWindow(owner, FALSE);
     ShowWindow(g_profile_dialog.hwnd, SW_SHOW);
     SetForegroundWindow(g_profile_dialog.hwnd);
@@ -1463,7 +1666,11 @@ static HWND create_label(HWND parent, const char *text, int x, int y, int width,
     HWND hwnd = CreateWindowExA(0, "STATIC", text, WS_CHILD | WS_VISIBLE,
                                 SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, NULL,
                                 GetModuleHandleA(NULL), NULL);
-    if (hwnd) SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    if (hwnd) {
+        SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    } else {
+        set_status("Error: Unable to create label control.");
+    }
     return hwnd;
 }
 
@@ -1473,7 +1680,11 @@ static HWND create_group(HWND parent, const char *text, int x, int y, int width,
                                 WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
                                 SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, NULL,
                                 GetModuleHandleA(NULL), NULL);
-    if (hwnd) SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    if (hwnd) {
+        SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    } else {
+        set_status("Error: Unable to create group control.");
+    }
     return hwnd;
 }
 
@@ -1484,14 +1695,52 @@ static HWND create_combo(HWND parent, int id, int x, int y, int width, int heigh
                                 CBS_DROPDOWNLIST | WS_VSCROLL,
                                 SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, (HMENU)(INT_PTR)id,
                                 GetModuleHandleA(NULL), NULL);
-    if (hwnd) SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    if (hwnd) {
+        SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    } else {
+        set_status("Error: Unable to create combo control.");
+    }
+    return hwnd;
+}
+
+/* Create an owner-drawn colour combobox (fixed item height) so each item can
+   show a small swatch. Only use this for colour selectors; other combos can
+   remain the standard system-drawn control. */
+static HWND create_color_combo(HWND parent, int id, int x, int y, int width, int height)
+{
+    HWND hwnd = CreateWindowExA(WS_EX_CLIENTEDGE, "COMBOBOX", "",
+                                WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                CBS_DROPDOWNLIST | WS_VSCROLL | CBS_OWNERDRAWFIXED,
+                                SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, (HMENU)(INT_PTR)id,
+                                GetModuleHandleA(NULL), NULL);
+    if (hwnd) {
+        SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    } else {
+        set_status("Error: Unable to create colour combo control.");
+    }
+    return hwnd;
+}
+
+static HWND create_brightness_combo(HWND parent, int id, int x, int y, int width, int height)
+{
+    HWND hwnd = CreateWindowExA(WS_EX_CLIENTEDGE, "COMBOBOX", "",
+                                WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                CBS_DROPDOWNLIST | WS_VSCROLL | CBS_OWNERDRAWFIXED,
+                                SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, (HMENU)(INT_PTR)id,
+                                GetModuleHandleA(NULL), NULL);
+    if (hwnd) {
+        SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    } else {
+        set_status("Error: Unable to create brightness combo control.");
+    }
     return hwnd;
 }
 
 static int is_accent_button(int id)
 {
     return id == IDC_APPLY_ALL || id == IDC_APPLY_MODE ||
-           id == IDC_SMOOTH || id == IDC_APPLY_PROFILE;
+           id == IDC_SMOOTH || id == IDC_APPLY_PROFILE ||
+           id == IDC_PROFILE_SAVE;
 }
 
 static HWND create_button(HWND parent, const char *text, int id,
@@ -1507,12 +1756,23 @@ static HWND create_button(HWND parent, const char *text, int id,
     hwnd = CreateWindowExA(0, "BUTTON", text, style,
                            SCALE(x), SCALE(y), SCALE(width), SCALE(height), parent, (HMENU)(INT_PTR)id,
                            GetModuleHandleA(NULL), NULL);
-    if (hwnd) SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    if (hwnd) {
+        SendMessageA(hwnd, WM_SETFONT, (WPARAM)g_font, TRUE);
+    } else {
+        set_status("Error: Unable to create button control.");
+    }
     return hwnd;
 }
 
 static void draw_button(const DRAWITEMSTRUCT *item)
 {
+    /* Route owner-drawn combobox items here if the WM_DRAWITEM handler wasn't
+       updated in all locations: handle colour and brightness combos first. */
+    if (item && item->CtlType == ODT_COMBOBOX) {
+        if (is_color_combo_hwnd(item->hwndItem)) { draw_color_combobox(item); return; }
+        if (is_brightness_combo_hwnd(item->hwndItem)) { draw_brightness_combobox(item); return; }
+    }
+
     RECT rect;
     HBRUSH brush;
     HPEN pen;
@@ -1559,8 +1819,210 @@ static void draw_button(const DRAWITEMSTRUCT *item)
 
     if (state & ODS_FOCUS) {
         RECT focus = rect;
-        InflateRect(&focus, -SCALE(3), -SCALE(3));
+        InflateRect(&focus, -SCALE(LAYOUT_FOCUS_INSET), -SCALE(LAYOUT_FOCUS_INSET));
         DrawFocusRect(item->hDC, &focus);
+    }
+}
+
+/* Helper to determine whether a combobox HWND is one of the colour selectors */
+static int is_color_combo_hwnd(HWND hwnd)
+{
+    int i;
+    if (!hwnd) return 0;
+    if (hwnd == g_globalColor) return 1;
+    if (g_profile_dialog.color && hwnd == g_profile_dialog.color) return 1;
+    for (i = 0; i < ZONE_COUNT; ++i) if (g_zoneColor[i] && hwnd == g_zoneColor[i]) return 1;
+    return 0;
+}
+
+static int is_brightness_combo_hwnd(HWND hwnd)
+{
+    int i;
+    if (!hwnd) return 0;
+    if (hwnd == g_globalBrightness) return 1;
+    if (g_profile_dialog.bright && hwnd == g_profile_dialog.bright) return 1;
+    for (i = 0; i < ZONE_COUNT; ++i) if (g_zoneBrightness[i] && hwnd == g_zoneBrightness[i]) return 1;
+    return 0;
+}
+
+/* Draw an owner-drawn combobox list item with a small colour swatch on the left
+   and the friendly label to the right. Handles both list items and the
+   selection display (itemID == -1) by resolving the current selection index. */
+static void draw_color_combobox(const DRAWITEMSTRUCT *item)
+{
+    if (!item) return;
+
+    HDC dc = item->hDC;
+    RECT rc = item->rcItem;
+    int idx = (int)item->itemID;
+    char text[128] = {0};
+    int color_count = (int)(sizeof(color_map) / sizeof(color_map[0]));
+
+    /* If itemID == -1, draw the selection field: query current selection */
+    if (idx == -1) {
+        idx = (int)SendMessageA(item->hwndItem, CB_GETCURSEL, 0, 0);
+    }
+
+    /* Determine selection background/text colours using system highlight for accessibility */
+    BOOL is_selected = (item->itemState & ODS_SELECTED) != 0;
+    COLORREF bg = is_selected ? GetSysColor(COLOR_HIGHLIGHT) : CLR_CONTROL;
+    COLORREF text_color = is_selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : CLR_TEXT;
+
+    /* Background */
+    HBRUSH brush = CreateSolidBrush(bg);
+    FillRect(dc, &rc, brush);
+    DeleteObject(brush);
+
+    /* Swatch rectangle */
+    int pad = SCALE(4);
+    int sw = SCALE(16);
+    RECT swr = { rc.left + pad, rc.top + SCALE(3), rc.left + pad + sw, rc.bottom - SCALE(3) };
+
+    if (idx >= 0 && idx < color_count) {
+        COLORREF c = color_map[idx];
+        /* Special rendering for the "nocolor" entry (draw an empty box with an X) */
+        if (c == RGB(40,40,40)) {
+            HBRUSH oldb = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+            HPEN pen = CreatePen(PS_SOLID, 1, RGB(128,128,128));
+            HGDIOBJ oldpen = SelectObject(dc, pen);
+            Rectangle(dc, swr.left, swr.top, swr.right, swr.bottom);
+            MoveToEx(dc, swr.left, swr.top, NULL);
+            LineTo(dc, swr.right, swr.bottom);
+            MoveToEx(dc, swr.left, swr.bottom, NULL);
+            LineTo(dc, swr.right, swr.top);
+            SelectObject(dc, oldpen);
+            SelectObject(dc, oldb);
+            DeleteObject(pen);
+        } else {
+            HBRUSH b = CreateSolidBrush(c);
+            FillRect(dc, &swr, b);
+            DeleteObject(b);
+            /* border */
+            HPEN pen = CreatePen(PS_SOLID, 1, RGB(0,0,0));
+            HGDIOBJ old = SelectObject(dc, pen);
+            HBRUSH oldb = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+            Rectangle(dc, swr.left, swr.top, swr.right, swr.bottom);
+            SelectObject(dc, oldb);
+            SelectObject(dc, old);
+            DeleteObject(pen);
+        }
+    } else {
+        /* Unknown index: draw empty box */
+        HBRUSH oldb = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(128,128,128));
+        HGDIOBJ old = SelectObject(dc, pen);
+        Rectangle(dc, swr.left, swr.top, swr.right, swr.bottom);
+        SelectObject(dc, old);
+        SelectObject(dc, oldb);
+        DeleteObject(pen);
+    }
+
+    /* Text: use the canonical labels array to avoid encoding issues when
+       retrieving text from the control. The colour labels are stored in
+       color_labels[] and are aligned with color_map/colors[]. */
+    if (idx >= 0 && idx < color_count) {
+        /* Copy with truncation protection */
+        strncpy(text, color_labels[idx], sizeof(text) - 1);
+        text[sizeof(text) - 1] = '\0';
+    } else {
+        text[0] = '\0';
+    }
+
+    RECT tr = rc;
+    tr.left = swr.right + SCALE(6);
+    tr.right = rc.right - SCALE(4);
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, text_color);
+    HGDIOBJ old_font = SelectObject(dc, g_font);
+    DrawTextA(dc, text, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    /* Restore previous font */
+    SelectObject(dc, old_font);
+
+    if (item->itemState & ODS_FOCUS) {
+        RECT focus = tr;
+        InflateRect(&focus, -SCALE(LAYOUT_FOCUS_INSET), -SCALE(LAYOUT_FOCUS_INSET));
+        DrawFocusRect(dc, &focus);
+    }
+}
+
+/* Draw brightness indicators as a group of filled/unfilled circles followed by
+   the human-readable label. Uses brightness_labels[] as the canonical text. */
+static void draw_brightness_combobox(const DRAWITEMSTRUCT *item)
+{
+    if (!item) return;
+
+    HDC dc = item->hDC;
+    RECT rc = item->rcItem;
+    int idx = (int)item->itemID; /* may be -1 for the selection field */
+    char text[128] = {0};
+    int bcount = (int)(sizeof(brightness) / sizeof(brightness[0]));
+    int total_slots = 5; /* render 0..5 filled circles */
+
+    if (idx == -1) idx = (int)SendMessageA(item->hwndItem, CB_GETCURSEL, 0, 0);
+    if (idx < 0 || idx >= bcount) idx = 0;
+
+    BOOL is_selected = (item->itemState & ODS_SELECTED) != 0;
+    COLORREF bg = is_selected ? GetSysColor(COLOR_HIGHLIGHT) : CLR_CONTROL;
+    COLORREF text_color = is_selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : CLR_TEXT;
+
+    /* Background */
+    HBRUSH brush = CreateSolidBrush(bg);
+    FillRect(dc, &rc, brush);
+    DeleteObject(brush);
+
+    /* Circles area */
+    int pad = SCALE(4);
+    int diameter = SCALE(6);
+    int spacing = SCALE(3);
+    int start_x = rc.left + pad;
+    int cy = (rc.top + rc.bottom) / 2;
+    int y1 = cy - diameter / 2;
+    int y2 = cy + diameter / 2;
+
+    /* Draw total_slots circles using a compact layout so the text label still fits. */
+    int i;
+    for (i = 0; i < total_slots; ++i) {
+        int x1 = start_x + i * (diameter + spacing);
+        int x2 = x1 + diameter;
+        /* Border */
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(120,120,120));
+        HGDIOBJ oldpen = SelectObject(dc, pen);
+        if (i < idx) {
+            /* filled */
+            HBRUSH b = CreateSolidBrush(text_color);
+            HGDIOBJ oldb = SelectObject(dc, b);
+            Ellipse(dc, x1, y1, x2, y2);
+            SelectObject(dc, oldb);
+            DeleteObject(b);
+        } else {
+            /* empty */
+            HBRUSH oldb = SelectObject(dc, GetStockObject(NULL_BRUSH));
+            Ellipse(dc, x1, y1, x2, y2);
+            SelectObject(dc, oldb);
+        }
+        SelectObject(dc, oldpen);
+        DeleteObject(pen);
+    }
+
+    /* Text label to the right of circles */
+    strncpy(text, brightness_labels[idx], sizeof(text) - 1);
+    text[sizeof(text)-1] = '\0';
+
+    RECT tr = rc;
+    tr.left = start_x + total_slots * (diameter + spacing) + SCALE(4);
+    tr.right = rc.right - SCALE(4);
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, text_color);
+    HGDIOBJ oldfont = SelectObject(dc, g_font);
+    DrawTextA(dc, text, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    SelectObject(dc, oldfont);
+
+    if (item->itemState & ODS_FOCUS) {
+        RECT focus = tr;
+        InflateRect(&focus, -SCALE(LAYOUT_FOCUS_INSET), -SCALE(LAYOUT_FOCUS_INSET));
+        DrawFocusRect(dc, &focus);
     }
 }
 
@@ -1572,38 +2034,38 @@ static void create_controls(HWND hwnd)
     int zone;
     HWND title;
 
-    title = create_label(hwnd, "LEGION Y720 KEYBOARD BACKLIGHT", 30, 18, 700, 35);
+    title = create_label(hwnd, "LEGION Y720 KEYBOARD BACKLIGHT", LAYOUT_MARGIN_X + 5, LAYOUT_MARGIN_Y, 700, 35);
     g_title = title;
     if (title) SendMessageA(title, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
-    create_label(hwnd, "Native Windows controller  |  Four-zone colour and brightness control", 32, 51, 760, 25);
+    create_label(hwnd, "Native Windows controller  |  Four-zone colour and brightness control", LAYOUT_MARGIN_X + 7, LAYOUT_MARGIN_Y + 33, 760, 25);
 
-    create_group(hwnd, "Global Lighting", 25, 82, 800, 145);
-    create_label(hwnd, "Colour", 45, 115, 60, 24);
-    g_globalColor = create_combo(hwnd, IDC_GLOBAL_COLOR, 105, 111, 210, 300);
+    create_group(hwnd, "Global Lighting", LAYOUT_MARGIN_X, 82, LAYOUT_GROUP_WIDTH_FULL, LAYOUT_GROUP_HEIGHT);
+    create_label(hwnd, "Colour", LAYOUT_MARGIN_X + 20, 115, LAYOUT_CONTROL_WIDTH, LAYOUT_CONTROL_HEIGHT);
+    g_globalColor = create_color_combo(hwnd, IDC_GLOBAL_COLOR, 105, 111, LAYOUT_COMBO_WIDTH_LONG, 300);
     add_combo_items(g_globalColor, color_labels, color_count);
     select_combo_value(g_globalColor, "crimson", colors, color_count);
 
-    create_label(hwnd, "Brightness", 335, 115, 85, 24);
-    g_globalBrightness = create_combo(hwnd, IDC_GLOBAL_BRIGHTNESS, 420, 111, 130, 300);
+    create_label(hwnd, "Brightness", 335, 115, 85, LAYOUT_CONTROL_HEIGHT);
+    g_globalBrightness = create_brightness_combo(hwnd, IDC_GLOBAL_BRIGHTNESS, 420, 111, LAYOUT_COMBO_WIDTH, 300);
     add_combo_items(g_globalBrightness, brightness_labels, bright_count);
     select_combo_value(g_globalBrightness, "high", brightness, bright_count);
 
-    create_label(hwnd, "Keyboard Mode", 565, 115, 100, 24);
+    create_label(hwnd, "Keyboard Mode", 565, 115, 100, LAYOUT_CONTROL_HEIGHT);
     g_globalMode = create_combo(hwnd, IDC_GLOBAL_MODE, 665, 111, 125, 300);
     add_combo_items(g_globalMode, mode_labels, mode_count);
     select_combo_value(g_globalMode, "always_on", modes, mode_count);
 
-    create_button(hwnd, "Apply Colour + Brightness to All Zones", IDC_APPLY_ALL, 45, 155, 300, 34);
-    g_lightingToggle = create_button(hwnd, "Turn Lighting Off", IDC_OFF, 360, 155, 180, 34);
-    create_button(hwnd, "Apply Mode to Keyboard", IDC_APPLY_MODE, 555, 155, 235, 34);
+    create_button(hwnd, "Apply Colour + Brightness to All Zones", IDC_APPLY_ALL, 45, 155, LAYOUT_BUTTON_WIDTH_MAX, LAYOUT_BUTTON_HEIGHT_MED);
+    g_lightingToggle = create_button(hwnd, "Turn Lighting Off", IDC_OFF, 360, 155, LAYOUT_BUTTON_WIDTH_LONG, LAYOUT_BUTTON_HEIGHT_MED);
+    create_button(hwnd, "Apply Mode to Keyboard", IDC_APPLY_MODE, 555, 155, LAYOUT_BUTTON_WIDTH_XLONG, LAYOUT_BUTTON_HEIGHT_MED);
     create_label(hwnd, "Mode is keyboard-wide on the Y720; colour and brightness remain zone-specific.", 45, 197, 740, 20);
 
-    create_group(hwnd, "Smooth Lighting", 25, 240, 800, 75);
+    create_group(hwnd, "Smooth Lighting", LAYOUT_MARGIN_X, 240, LAYOUT_GROUP_WIDTH_FULL, LAYOUT_GROUP_HEIGHT_SMALL);
     create_label(hwnd, "Cycles colours automatically, starting from the selected global colour and brightness.",
                  45, 270, 600, 25);
-    create_button(hwnd, "Start Smooth", IDC_SMOOTH, 660, 265, 130, 30);
+    create_button(hwnd, "Start Smooth", IDC_SMOOTH, 660, 265, 130, LAYOUT_BUTTON_HEIGHT);
 
-    create_group(hwnd, "Individual Zone Colour and Brightness", 25, 330, 800, 235);
+    create_group(hwnd, "Individual Zone Colour and Brightness", LAYOUT_MARGIN_X, 330, LAYOUT_GROUP_WIDTH_FULL, LAYOUT_GROUP_HEIGHT_LARGE);
     create_label(hwnd, "Zone", 45, 360, 65, 22);
     create_label(hwnd, "Keyboard Area", 115, 360, 180, 22);
     create_label(hwnd, "Colour", 305, 360, 130, 22);
@@ -1616,26 +2078,26 @@ static void create_controls(HWND hwnd)
         create_label(hwnd, zone_number, 45, y + 7, 65, 25);
         create_label(hwnd, zone_names[zone], 115, y + 7, 180, 25);
 
-        g_zoneColor[zone] = create_combo(hwnd, IDC_ZONE_BASE + zone * 10 + 1, 305, y, 170, 280);
+        g_zoneColor[zone] = create_color_combo(hwnd, IDC_ZONE_BASE + zone * 10 + 1, 305, y, 170, 280);
         add_combo_items(g_zoneColor[zone], color_labels, color_count);
         select_combo_value(g_zoneColor[zone], "crimson", colors, color_count);
 
-        g_zoneBrightness[zone] = create_combo(hwnd, IDC_ZONE_BASE + zone * 10 + 2, 495, y, 125, 280);
+        g_zoneBrightness[zone] = create_brightness_combo(hwnd, IDC_ZONE_BASE + zone * 10 + 2, 495, y, 125, 280);
         add_combo_items(g_zoneBrightness[zone], brightness_labels, bright_count);
         select_combo_value(g_zoneBrightness[zone], "high", brightness, bright_count);
 
         create_button(hwnd, "Apply", IDC_ZONE_BASE + zone * 10 + 4, 650, y, 120, 27);
     }
 
-    create_group(hwnd, "Profiles", 25, 580, 500, 115);
-    create_label(hwnd, "Profile", 45, 609, 60, 24);
-    g_profile = create_combo(hwnd, IDC_PROFILE, 110, 605, 390, 300);
+    create_group(hwnd, "Profiles", LAYOUT_MARGIN_X, 580, LAYOUT_GROUP_WIDTH, LAYOUT_GROUP_HEIGHT_MED);
+    create_label(hwnd, "Profile", 45, 609, 60, LAYOUT_CONTROL_HEIGHT);
+    g_profile = create_combo(hwnd, IDC_PROFILE, 105, 605, 380, 300);
     load_profiles();
-    create_button(hwnd, "Apply", IDC_APPLY_PROFILE, 45, 645, 145, 30);
-    create_button(hwnd, "New", IDC_PROFILE_NEW, 200, 645, 145, 30);
-    create_button(hwnd, "Delete", IDC_PROFILE_DELETE, 355, 645, 145, 30);
+    create_button(hwnd, "Apply", IDC_APPLY_PROFILE, 45, 645, LAYOUT_BUTTON_WIDTH, LAYOUT_BUTTON_HEIGHT);
+    create_button(hwnd, "New", IDC_PROFILE_NEW, 200, 645, LAYOUT_BUTTON_WIDTH, LAYOUT_BUTTON_HEIGHT);
+    create_button(hwnd, "Delete", IDC_PROFILE_DELETE, 355, 645, LAYOUT_BUTTON_WIDTH, LAYOUT_BUTTON_HEIGHT);
 
-    create_group(hwnd, "Startup", 540, 580, 285, 115);
+    create_group(hwnd, "Startup", 530, 580, 295, LAYOUT_GROUP_HEIGHT_MED);
     g_startup = CreateWindowExA(0, "BUTTON", "Start with Windows and Restore Last State",
                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                 SCALE(555), SCALE(602), SCALE(255), SCALE(24), hwnd, (HMENU)(INT_PTR)IDC_STARTUP,
@@ -1650,8 +2112,11 @@ static void create_controls(HWND hwnd)
     load_state_into_controls();
     load_last_on_state();
 
-    create_label(hwnd, "Status", 30, 710, 55, 24);
-    g_status = create_label(hwnd, "Ready.", 85, 710, 740, 24);
+    create_label(hwnd, "Status", 30, 710, 55, LAYOUT_CONTROL_HEIGHT);
+    /* Reduce width slightly to make room for the Uninstall button on the right */
+    g_status = create_label(hwnd, "Ready.", 85, 710, 650, LAYOUT_CONTROL_HEIGHT);
+    /* Small uninstall/clear-residue button on the bottom-right */
+    create_button(hwnd, "Uninstall", IDC_UNINSTALL, 740, 706, 90, LAYOUT_BUTTON_HEIGHT);
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -1702,6 +2167,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 }
                 return 0;
             }
+            if (id == IDC_UNINSTALL) { perform_uninstall(hwnd); return 0; }
             if (id == ID_TRAY_OFF) { turn_off(); return 0; }
             if (id == ID_TRAY_ON) { turn_on_from_last_state(); return 0; }
             if (id == ID_TRAY_EXIT) { exit_application(hwnd); return 0; }
@@ -1715,9 +2181,25 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             if (wParam == SIZE_MINIMIZED) { hide_to_tray(); return 0; }
             break;
 
-        case WM_DRAWITEM:
-            draw_button((const DRAWITEMSTRUCT *)lParam);
+        case WM_MEASUREITEM: {
+            MEASUREITEMSTRUCT *mis = (MEASUREITEMSTRUCT *)lParam;
+            if (mis && mis->CtlType == ODT_COMBOBOX) {
+                mis->itemHeight = SCALE(24);
+            }
             return TRUE;
+        }
+
+        case WM_DRAWITEM: {
+            const DRAWITEMSTRUCT *dis = (const DRAWITEMSTRUCT *)lParam;
+            if (dis && dis->CtlType == ODT_COMBOBOX && is_color_combo_hwnd(dis->hwndItem)) {
+                draw_color_combobox(dis);
+                return TRUE;
+            } else if (dis) {
+                draw_button(dis);
+                return TRUE;
+            }
+            return TRUE;
+        }
 
         case WM_CTLCOLORSTATIC:
         case WM_CTLCOLORBTN: {
@@ -1812,7 +2294,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command_line, i
 
     g_hWnd = CreateWindowExA(0, CLASS_NAME, APP_TITLE,
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                             CW_USEDEFAULT, CW_USEDEFAULT, SCALE(865), SCALE(770),
+                             CW_USEDEFAULT, CW_USEDEFAULT, SCALE(LAYOUT_WINDOW_WIDTH), SCALE(LAYOUT_WINDOW_HEIGHT),
                              NULL, NULL, instance, NULL);
     if (!g_hWnd) {
         MessageBoxA(NULL, "Unable to create GUI window.", APP_TITLE, MB_ICONERROR);

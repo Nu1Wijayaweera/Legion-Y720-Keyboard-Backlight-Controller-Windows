@@ -90,7 +90,9 @@ HANDLE find_y720(void)
     if (devices == INVALID_HANDLE_VALUE)
         return INVALID_HANDLE_VALUE;
 
-    for (DWORD index = 0;; index++) {
+    DWORD index;
+
+    for (index = 0;; index++) {
 
         SP_DEVICE_INTERFACE_DATA interface_data;
 
@@ -328,9 +330,9 @@ int apply_all(
     int color,
     int brightness)
 {
-    for (int zone = 0;
-         zone < ZONE_COUNT;
-         zone++) {
+    int zone;
+
+    for (zone = 0; zone < ZONE_COUNT; zone++) {
 
         if (set_zone(
                 device,
