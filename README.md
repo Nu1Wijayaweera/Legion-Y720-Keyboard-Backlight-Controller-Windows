@@ -293,6 +293,8 @@ src/
     Y720BacklightHID.c
     Y720BacklightHID.h
     Y720BacklightGUI.rc
+    uninstall.c
+    uninstall.h
 
 resources/
     keyboard.ico
