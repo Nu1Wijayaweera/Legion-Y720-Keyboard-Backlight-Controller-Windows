@@ -8,10 +8,34 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define REPORT_ID       Y720_REPORT_ID
-#define REPORT_LENGTH   Y720_REPORT_LENGTH
-#define ZONE_COUNT      Y720_ZONE_COUNT
+#define REPORT_ID Y720_REPORT_ID
+#define REPORT_LENGTH Y720_REPORT_LENGTH
+#define ZONE_COUNT Y720_ZONE_COUNT
 
+/* =========================================================
+ * Y720BacklightCore.c - HID core helpers
+ *
+ * Purpose:
+ * - Low-level device discovery and HID feature report handling for the
+ *   Lenovo Legion Y720 keyboard backlight. This file provides small, focused
+ *   helpers that translate human-friendly values (colour/brightness/mode)
+ *   into device commands and expose safe, high-level functions the GUI can
+ *   call: y720_apply_all, y720_apply_zone, y720_apply_zones, y720_turn_off.
+ *
+ * Organization:
+ * - Value mapping helpers (color_value, brightness_value, mode_value)
+ * - HID device discovery (find_y720)
+ * - HID command builders / send_feature wrappers
+ * - High-level operations that manage handle lifetime
+ *
+ * Teaching notes:
+ * - The core keeps HID handle lifetime inside this module so callers (GUI)
+ *   don't need to know about SetupAPI or the HID report structure.
+ * - REPORT_ID and REPORT_LENGTH reflect device-specific constants defined in
+ *   the header; these are intentionally simple and self-contained.
+ * ========================================================= */
+
+/* === VALUE MAPPING HELPERS === */
 static int equals(const char *a, const char *b)
 {
     return _stricmp(a, b) == 0;
@@ -19,59 +43,89 @@ static int equals(const char *a, const char *b)
 
 int color_value(const char *name)
 {
-    if (equals(name, "crimson"))              return 0;
-    if (equals(name, "torch_red"))            return 1;
-    if (equals(name, "hollywood_cerise"))     return 2;
-    if (equals(name, "magenta"))              return 3;
-    if (equals(name, "electric_violet"))      return 4;
-    if (equals(name, "electric_violet_2"))    return 5;
-    if (equals(name, "blue"))                 return 6;
-    if (equals(name, "blue_ribbon"))          return 7;
-    if (equals(name, "azure_radiance"))       return 8;
-    if (equals(name, "cyan"))                 return 9;
-    if (equals(name, "spring_green"))         return 10;
-    if (equals(name, "spring_green_2"))       return 11;
-    if (equals(name, "green"))                return 12;
-    if (equals(name, "bright_green"))         return 13;
-    if (equals(name, "lime"))                 return 14;
-    if (equals(name, "yellow"))               return 15;
-    if (equals(name, "web_orange"))           return 16;
-    if (equals(name, "international_orange")) return 17;
-    if (equals(name, "white"))                return 18;
-    if (equals(name, "nocolor"))              return 19;
+    if (equals(name, "crimson"))
+        return 0;
+    if (equals(name, "torch_red"))
+        return 1;
+    if (equals(name, "hollywood_cerise"))
+        return 2;
+    if (equals(name, "magenta"))
+        return 3;
+    if (equals(name, "electric_violet"))
+        return 4;
+    if (equals(name, "electric_violet_2"))
+        return 5;
+    if (equals(name, "blue"))
+        return 6;
+    if (equals(name, "blue_ribbon"))
+        return 7;
+    if (equals(name, "azure_radiance"))
+        return 8;
+    if (equals(name, "cyan"))
+        return 9;
+    if (equals(name, "spring_green"))
+        return 10;
+    if (equals(name, "spring_green_2"))
+        return 11;
+    if (equals(name, "green"))
+        return 12;
+    if (equals(name, "bright_green"))
+        return 13;
+    if (equals(name, "lime"))
+        return 14;
+    if (equals(name, "yellow"))
+        return 15;
+    if (equals(name, "web_orange"))
+        return 16;
+    if (equals(name, "international_orange"))
+        return 17;
+    if (equals(name, "white"))
+        return 18;
+    if (equals(name, "nocolor"))
+        return 19;
 
     return -1;
 }
-
 
 int brightness_value(const char *name)
 {
-    if (equals(name, "off"))    return 0;
-    if (equals(name, "low"))    return 1;
-    if (equals(name, "medium")) return 2;
-    if (equals(name, "high"))   return 3;
-    if (equals(name, "ultra"))  return 4;
-    if (equals(name, "enough")) return 5;
+    if (equals(name, "off"))
+        return 0;
+    if (equals(name, "low"))
+        return 1;
+    if (equals(name, "medium"))
+        return 2;
+    if (equals(name, "high"))
+        return 3;
+    if (equals(name, "ultra"))
+        return 4;
+    if (equals(name, "enough"))
+        return 5;
 
     return -1;
 }
-
 
 int mode_value(const char *name)
 {
-    if (equals(name, "heartbeat")) return 0;
-    if (equals(name, "breath"))    return 1;
-    if (equals(name, "smooth"))    return 2;
-    if (equals(name, "always_on")) return 3;
-    if (equals(name, "wave"))      return 4;
+    if (equals(name, "heartbeat"))
+        return 0;
+    if (equals(name, "breath"))
+        return 1;
+    if (equals(name, "smooth"))
+        return 2;
+    if (equals(name, "always_on"))
+        return 3;
+    if (equals(name, "wave"))
+        return 4;
 
     return -1;
 }
 
-
-/* =========================================================
-   HID device discovery
-   ========================================================= */
+/* === HID DEVICE DISCOVERY ===
+ * Helpers that locate the Y720's HID interface using SetupAPI and verify the
+ * UsagePage and Usage values using HidD/HidP. Returns an open HANDLE on success
+ * (caller must CloseHandle), or INVALID_HANDLE_VALUE on failure.
+ */
 
 HANDLE find_y720(void)
 {
@@ -84,22 +138,21 @@ HANDLE find_y720(void)
             &hid_guid,
             NULL,
             NULL,
-            DIGCF_PRESENT | DIGCF_DEVICEINTERFACE
-        );
+            DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
 
     if (devices == INVALID_HANDLE_VALUE)
         return INVALID_HANDLE_VALUE;
 
     DWORD index;
 
-    for (index = 0;; index++) {
+    for (index = 0;; index++)
+    {
 
         SP_DEVICE_INTERFACE_DATA interface_data;
 
         ZeroMemory(
             &interface_data,
-            sizeof(interface_data)
-        );
+            sizeof(interface_data));
 
         interface_data.cbSize =
             sizeof(interface_data);
@@ -109,7 +162,8 @@ HANDLE find_y720(void)
                 NULL,
                 &hid_guid,
                 index,
-                &interface_data)) {
+                &interface_data))
+        {
 
             if (GetLastError() ==
                 ERROR_NO_MORE_ITEMS)
@@ -126,15 +180,14 @@ HANDLE find_y720(void)
             NULL,
             0,
             &required_size,
-            NULL
-        );
+            NULL);
 
         if (!required_size)
             continue;
 
         PSP_DEVICE_INTERFACE_DETAIL_DATA_W detail =
             (PSP_DEVICE_INTERFACE_DETAIL_DATA_W)
-            malloc(required_size);
+                malloc(required_size);
 
         if (!detail)
             continue;
@@ -148,7 +201,8 @@ HANDLE find_y720(void)
                 detail,
                 required_size,
                 NULL,
-                NULL)) {
+                NULL))
+        {
 
             free(detail);
             continue;
@@ -162,10 +216,10 @@ HANDLE find_y720(void)
                 NULL,
                 OPEN_EXISTING,
                 0,
-                NULL
-            );
+                NULL);
 
-        if (device == INVALID_HANDLE_VALUE) {
+        if (device == INVALID_HANDLE_VALUE)
+        {
             free(detail);
             continue;
         }
@@ -174,15 +228,15 @@ HANDLE find_y720(void)
 
         ZeroMemory(
             &attributes,
-            sizeof(attributes)
-        );
+            sizeof(attributes));
 
         attributes.Size =
             sizeof(attributes);
 
         if (!HidD_GetAttributes(
                 device,
-                &attributes)) {
+                &attributes))
+        {
 
             CloseHandle(device);
             free(detail);
@@ -190,7 +244,8 @@ HANDLE find_y720(void)
         }
 
         if (attributes.VendorID != Y720_VID ||
-            attributes.ProductID != Y720_PID) {
+            attributes.ProductID != Y720_PID)
+        {
 
             CloseHandle(device);
             free(detail);
@@ -201,7 +256,8 @@ HANDLE find_y720(void)
 
         if (!HidD_GetPreparsedData(
                 device,
-                &preparsed)) {
+                &preparsed))
+        {
 
             CloseHandle(device);
             free(detail);
@@ -213,19 +269,20 @@ HANDLE find_y720(void)
         NTSTATUS status =
             HidP_GetCaps(
                 preparsed,
-                &caps
-            );
+                &caps);
 
         HidD_FreePreparsedData(preparsed);
 
-        if (status != HIDP_STATUS_SUCCESS) {
+        if (status != HIDP_STATUS_SUCCESS)
+        {
             CloseHandle(device);
             free(detail);
             continue;
         }
 
         if (caps.UsagePage != Y720_USAGE_PAGE ||
-            caps.Usage != Y720_USAGE) {
+            caps.Usage != Y720_USAGE)
+        {
 
             CloseHandle(device);
             free(detail);
@@ -244,10 +301,11 @@ HANDLE find_y720(void)
     return INVALID_HANDLE_VALUE;
 }
 
-
-/* =========================================================
-   HID commands
-   ========================================================= */
+/* === HID COMMAND HELPERS ===
+ * Small wrappers that build HID feature reports and send them with HidD_SetFeature.
+ * The report layout is documented below; callers typically use the high-level
+ * helpers (y720_apply_* functions) which manage device handles for safety.
+ */
 
 int send_feature(
     HANDLE device,
@@ -256,14 +314,14 @@ int send_feature(
     if (!HidD_SetFeature(
             device,
             report,
-            REPORT_LENGTH)) {
+            REPORT_LENGTH))
+    {
 
         return -1;
     }
 
     return 0;
 }
-
 
 /*
  * Y720 lighting report:
@@ -291,15 +349,12 @@ int set_zone(
         (unsigned char)color,
         (unsigned char)brightness,
         (unsigned char)zone,
-        0x00
-    };
+        0x00};
 
     return send_feature(
         device,
-        report
-    );
+        report);
 }
-
 
 int apply_final(HANDLE device)
 {
@@ -310,15 +365,12 @@ int apply_final(HANDLE device)
         0x00,
         0x00,
         0x00,
-        0x00
-    };
+        0x00};
 
     return send_feature(
         device,
-        report
-    );
+        report);
 }
-
 
 /*
  * Apply the same configuration to all four zones.
@@ -332,14 +384,16 @@ int apply_all(
 {
     int zone;
 
-    for (zone = 0; zone < ZONE_COUNT; zone++) {
+    for (zone = 0; zone < ZONE_COUNT; zone++)
+    {
 
         if (set_zone(
                 device,
                 mode,
                 color,
                 brightness,
-                zone) < 0) {
+                zone) < 0)
+        {
 
             return -1;
         }
@@ -347,7 +401,6 @@ int apply_all(
 
     return apply_final(device);
 }
-
 
 /*
  * Apply configuration to ONE zone only.
@@ -361,7 +414,8 @@ int apply_one_zone(
     int brightness)
 {
     if (zone < 0 ||
-        zone >= ZONE_COUNT) {
+        zone >= ZONE_COUNT)
+    {
 
         return -1;
     }
@@ -371,7 +425,8 @@ int apply_one_zone(
             mode,
             color,
             brightness,
-            zone) < 0) {
+            zone) < 0)
+    {
 
         return -1;
     }
@@ -379,16 +434,12 @@ int apply_one_zone(
     return apply_final(device);
 }
 
-
-
-
-/* =========================================================
-   High-level operations
-
-   These helpers keep HID handle lifetime inside the shared core so callers
-   such as the GUI never need to know about device discovery or command
-   strings.
-   ========================================================= */
+/* === HIGH-LEVEL OPERATIONS (PUBLIC CORE API) ===
+ * These helpers keep HID handle lifetime inside the shared core so callers
+ * (e.g. the GUI) do not need to deal with SetupAPI, HidD or raw report
+ * formatting. The functions below are the public API exposed in
+ * Y720BacklightCore.h.
+ */
 
 int y720_apply_all(int mode, int color, int brightness)
 {
@@ -428,8 +479,10 @@ int y720_apply_zones(const int *modes, const int *colors, const int *brightness)
     if (device == INVALID_HANDLE_VALUE)
         return -1;
 
-    for (zone = 0; zone < ZONE_COUNT; ++zone) {
-        if (set_zone(device, modes[zone], colors[zone], brightness[zone], zone) < 0) {
+    for (zone = 0; zone < ZONE_COUNT; ++zone)
+    {
+        if (set_zone(device, modes[zone], colors[zone], brightness[zone], zone) < 0)
+        {
             CloseHandle(device);
             return -1;
         }
@@ -445,6 +498,5 @@ int y720_turn_off(void)
     return y720_apply_all(
         mode_value("always_on"),
         color_value("crimson"),
-        brightness_value("off")
-    );
+        brightness_value("off"));
 }

@@ -7,13 +7,30 @@
 
 #include "Y720BacklightHID.h"
 
-#define Y720_INPUT_VID             0x048D
-#define Y720_INPUT_PID             0xC100
-#define Y720_INPUT_USAGE_PAGE     0x000C
-#define Y720_INPUT_USAGE          0x0001
-#define Y720_INPUT_REPORT_ID      0x02
-#define Y720_INPUT_VALUE          0x50
+/* Y720BacklightHID.c - Raw input / Fn+Space handler
+ *
+ * Purpose:
+ * - Register for Raw Input from the Windows input subsystem and detect the
+ *   Y720 keyboard's consumer-control collection that emits the Fn+Space event.
+ * - Provide a tiny callback-based API used by the GUI to receive one-shot
+ *   notifications for the Fn+Space brightness toggle.
+ *
+ * Organization:
+ * - Constants identifying the target consumer device collection
+ * - Module-scoped cached device and callback state
+ * - Raw input parsing and device identification
+ * - Public API: y720_input_init, y720_input_handle_message, y720_input_shutdown
+ */
 
+/* === DEVICE IDENTIFIERS === */
+#define Y720_INPUT_VID 0x048D
+#define Y720_INPUT_PID 0xC100
+#define Y720_INPUT_USAGE_PAGE 0x000C
+#define Y720_INPUT_USAGE 0x0001
+#define Y720_INPUT_REPORT_ID 0x02
+#define Y720_INPUT_VALUE 0x50
+
+/* === MODULE STATE (GLOBALS) === */
 static HWND g_hwnd = NULL;
 static Y720FnSpaceCallback g_callback = NULL;
 static void *g_context = NULL;
@@ -48,7 +65,8 @@ static int is_y720_consumer_device(HANDLE device)
         info.hid.dwVendorId != Y720_INPUT_VID ||
         info.hid.dwProductId != Y720_INPUT_PID ||
         info.hid.usUsagePage != Y720_INPUT_USAGE_PAGE ||
-        info.hid.usUsage != Y720_INPUT_USAGE) {
+        info.hid.usUsage != Y720_INPUT_USAGE)
+    {
         g_cached_device = device;
         g_cached_device_valid = 1;
         g_cached_device_match = 0;
@@ -69,7 +87,8 @@ static int is_y720_consumer_device(HANDLE device)
     if (!name)
         return 0;
 
-    if (GetRawInputDeviceInfoA(device, RIDI_DEVICENAME, name, &size) == (UINT)-1) {
+    if (GetRawInputDeviceInfoA(device, RIDI_DEVICENAME, name, &size) == (UINT)-1)
+    {
         free(name);
         return 0;
     }
@@ -96,7 +115,8 @@ static void process_raw_input(HRAWINPUT raw_input)
         return;
 
     if (GetRawInputData(raw_input, RID_INPUT, NULL, &size,
-                        sizeof(RAWINPUTHEADER)) != 0 || size == 0)
+                        sizeof(RAWINPUTHEADER)) != 0 ||
+        size == 0)
         return;
 
     buffer = (BYTE *)malloc(size);
@@ -104,7 +124,8 @@ static void process_raw_input(HRAWINPUT raw_input)
         return;
 
     if (GetRawInputData(raw_input, RID_INPUT, buffer, &size,
-                        sizeof(RAWINPUTHEADER)) == (UINT)-1) {
+                        sizeof(RAWINPUTHEADER)) == (UINT)-1)
+    {
         free(buffer);
         return;
     }
@@ -112,30 +133,36 @@ static void process_raw_input(HRAWINPUT raw_input)
     raw = (RAWINPUT *)buffer;
 
     if (raw->header.dwType == RIM_TYPEHID &&
-        is_y720_consumer_device(raw->header.hDevice)) {
+        is_y720_consumer_device(raw->header.hDevice))
+    {
 
         RAWHID *hid = &raw->data.hid;
 
-        if (hid->dwSizeHid >= 3 && hid->dwCount > 0) {
+        if (hid->dwSizeHid >= 3 && hid->dwCount > 0)
+        {
             DWORD report;
 
-            for (report = 0; report < hid->dwCount; ++report) {
+            for (report = 0; report < hid->dwCount; ++report)
+            {
                 BYTE *data = hid->bRawData + report * hid->dwSizeHid;
 
                 if (data[0] == Y720_INPUT_REPORT_ID &&
                     data[1] == Y720_INPUT_VALUE &&
-                    data[2] == 0x00) {
+                    data[2] == 0x00)
+                {
 
                     /* One callback per physical press, even if a device
                        happens to repeat the consumer report while held. */
-                    if (!g_pressed) {
+                    if (!g_pressed)
+                    {
                         g_pressed = 1;
                         g_callback(g_context);
                     }
                 }
                 else if (data[0] == Y720_INPUT_REPORT_ID &&
                          data[1] == 0x00 &&
-                         data[2] == 0x00) {
+                         data[2] == 0x00)
+                {
 
                     g_pressed = 0;
                 }
@@ -179,7 +206,8 @@ int y720_input_handle_message(UINT message, WPARAM wParam, LPARAM lParam)
     if (!g_initialized)
         return 0;
 
-    if (message == WM_INPUT_DEVICE_CHANGE) {
+    if (message == WM_INPUT_DEVICE_CHANGE)
+    {
         g_cached_device_valid = 0;
         return 1;
     }
