@@ -1,7 +1,7 @@
 # Legion Y720 Keyboard Backlight Controller for Windows
 
 <p align="center">
-  <img src="assets/github-social-preview.jpg" alt="Legion Y720 Keyboard Backlight Controller" width="850">
+  <img src="assets/github-social-preview.png" alt="Legion Y720 Keyboard Backlight Controller" width="850">
 </p>
 
 <p align="center">
