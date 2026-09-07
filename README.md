@@ -45,7 +45,7 @@ not require an installer.
 -   Optional Start with Windows setting
 -   Fn + Space keyboard shortcut
 -   System-tray integration
--   Tray controls for turning lighting on and off
+-   State-aware system-tray controls for lighting and Smooth mode
 -   Single-instance application
 -   Built-in uninstall and cleanup
 -   No installer required
@@ -84,6 +84,12 @@ Smooth mode continuously cycles the keyboard lighting through colours.
 The currently selected global colour and brightness are used as the
 starting state for the transition.
 
+Smooth can be started or stopped from the main window or the system tray.
+If lighting is off when Smooth is started, the last saved lighting state is
+restored first. Stopping Smooth returns the keyboard to `Always On` and
+restores the complete lighting configuration that was active before Smooth
+started, including separate zone settings.
+
 ### Profiles
 
 Profiles allow frequently used lighting configurations to be saved and
@@ -91,11 +97,17 @@ recalled.
 
 Profiles can contain:
 
--   Four-zone colour settings
--   Four-zone brightness settings
+-   A global colour and brightness for all four zones, or independent colour
+    and brightness settings for each zone
 -   Keyboard-wide lighting mode
 
 Profiles can be applied, created and deleted directly from the GUI.
+
+When creating a profile, the dialog provides separate global and four-zone
+options. If all four zone colour and brightness pairs are identical, the
+profile is automatically stored as a global profile because there is no
+meaningful zone difference. Profiles created by older versions remain
+compatible and are treated as global profiles.
 
 No predefined profiles are included with the release. Users can create
 their own profiles when needed.
@@ -153,14 +165,17 @@ tray.
 
 The tray menu provides quick access to:
 
+-   Turn lighting on or off
+-   Start or stop Smooth mode
 -   Show the main window
--   Turn lighting on
--   Turn lighting off
+					
+					 
 -   Exit the application
 
-Turning lighting off does not discard the current four-zone
-configuration. Turning the lighting back on restores the previously
-configured zone state.
+The first two entries reflect the current state. Turning lighting off does
+not discard the current four-zone configuration, and turning it back on
+restores the previously configured zone state.
+					  
 
 ## Single Instance
 
@@ -182,7 +197,7 @@ separate installer or administrator-level uninstaller.
 The controller was developed and tested specifically for:
 
 - Lenovo Legion Y720
-- Windows 10 / Windows 11
+- Windows 10
 - 64-bit Windows
 
 The tested keyboard lighting HID interface is:
@@ -238,6 +253,14 @@ configuration file managed by the program.
 
 Users normally do not need to create or edit this file manually. Profiles
 can be created, applied, and deleted directly from the GUI.
+
+When creating a profile, users can choose either global colour and
+brightness for all four zones, or separate colour and brightness values for
+each zone. Four-zone profiles are stored and applied through the same
+four-zone HID path used by the main window. If all four selected zones have
+identical values, the profile is automatically normalized to a global
+profile. Existing profiles created by older versions remain compatible and
+are treated as global profiles.
 
 No predefined profiles configuration is included with the release. A
 fresh installation therefore starts without user profiles, and users can
