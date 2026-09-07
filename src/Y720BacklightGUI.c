@@ -74,15 +74,19 @@
 #define IDC_PROFILE_MODE 3104
 #define IDC_PROFILE_SAVE 3105
 #define IDC_PROFILE_CANCEL 3106
+#define IDC_PROFILE_GLOBAL 3110
+#define IDC_PROFILE_ZONES 3111
+#define IDC_PROFILE_ZONE_BASE 3120
 
 #define WM_SHOW_EXISTING (WM_APP + 2)
 
 #define WM_TRAYICON (WM_APP + 1)
 #define TRAY_ICON_ID 5001
 #define IDI_Y720_KEYBOARD 101
-#define ID_TRAY_OFF 5003
-#define ID_TRAY_ON 5004
-#define ID_TRAY_EXIT 5005
+#define TRAY_TOGGLE_LIGHTING 5003
+#define TRAY_TOGGLE_SMOOTH 5004
+#define TRAY_SHOW 5005
+#define TRAY_EXIT 5006
 
 /* === GLOBAL STATE & UI CONTROL HANDLES ===
  *
@@ -101,6 +105,7 @@ static HWND g_title;
 static HWND g_globalColor, g_globalBrightness, g_globalMode;
 static HWND g_profile, g_status, g_startup;
 static HWND g_lightingToggle;
+static HWND g_smoothToggle;
 
 /* Profiles stored in memory for the profile combobox */
 #define MAX_PROFILES 64
@@ -123,6 +128,7 @@ static HANDLE g_single_instance_mutex = NULL;
 /* Layout / runtime state */
 static int g_dpi = 96; /* DPI used for scaling */
 static int g_lighting_on = 1; /* cached lighting enabled flag */
+static int g_smooth_active = 0;
 static char g_config_path[MAX_PATH];
 static int g_config_path_initialized = 0;
 
@@ -130,6 +136,9 @@ static int g_config_path_initialized = 0;
    This lets tray On restore the exact four-zone state without changing the
    persistent Off state or complicating the normal lighting path. */
 static int g_last_on_valid = 0;
+static int g_smooth_restore_valid = 0;
+static char g_smooth_restore_color[ZONE_COUNT][64];
+static char g_smooth_restore_brightness[ZONE_COUNT][32];
 
 /* Legion-style dark charcoal/red accent palette. */
 #define CLR_BG RGB(18, 18, 20)
@@ -172,6 +181,13 @@ static void update_lighting_toggle_button(int lighting_on)
     g_lighting_on = lighting_on ? 1 : 0;
     if (g_lightingToggle)
         SetWindowTextA(g_lightingToggle, g_lighting_on ? "Turn Lighting Off" : "Turn Lighting On");
+}
+
+static void update_smooth_toggle_button(int smooth_active)
+{
+    g_smooth_active = smooth_active ? 1 : 0;
+    if (g_smoothToggle)
+        SetWindowTextA(g_smoothToggle, g_smooth_active ? "Stop Smooth" : "Start Smooth");
 }
 
 #define SCALE(value) MulDiv((value), g_dpi, 96)
@@ -1059,11 +1075,29 @@ static void load_last_on_state(void)
  */
 static void lighting_set_and_save(int enabled, const char *mode_override)
 {
+    char mode[64];
+    int smooth_active = 0;
+
     /* Update UI button and cached flag. */
     update_lighting_toggle_button(enabled);
 
     /* Persist current control values into saved state. */
     save_current_state(enabled, mode_override);
+
+    if (enabled)
+    {
+        if (mode_override)
+            smooth_active = _stricmp(mode_override, "smooth") == 0;
+        else if (get_combo_value(g_globalMode,
+                                 modes,
+                                 (int)(sizeof(modes) / sizeof(modes[0])),
+                                 mode,
+                                 sizeof(mode)))
+            smooth_active = _stricmp(mode, "smooth") == 0;
+    }
+    if (!smooth_active)
+        g_smooth_restore_valid = 0;
+    update_smooth_toggle_button(smooth_active);
 }
 
 static int load_saved_state(saved_state_t *state)
@@ -1159,6 +1193,7 @@ static int restore_saved_state(void)
     }
 
     update_lighting_toggle_button(1);
+    update_smooth_toggle_button(_stricmp(state.mode, "smooth") == 0);
     set_status("Saved keyboard lighting state restored.");
     return 1;
 }
@@ -1284,13 +1319,80 @@ static void apply_keyboard_mode(void)
         int lighting_on = zones_have_lighting();
         remember_current_on_state();
         lighting_set_and_save(lighting_on, mode);
+        update_smooth_toggle_button(_stricmp(mode, "smooth") == 0);
     }
 }
 
-/* Smooth is intentionally separate: it starts from the current global colour/brightness. */
+static void turn_on_from_last_state(void);
+
+/* Smooth toggles the keyboard-wide animation without changing lighting power. */
 static void apply_smooth(void)
 {
     char color[64], bright[32], status[256];
+    int zone;
+
+    if (g_smooth_active)
+    {
+        int mode_id[ZONE_COUNT], color_id[ZONE_COUNT], bright_id[ZONE_COUNT];
+
+        if (!g_smooth_restore_valid)
+        {
+            select_combo_value(g_globalMode, "always_on",
+                               modes, (int)(sizeof(modes) / sizeof(modes[0])));
+            apply_keyboard_mode();
+            return;
+        }
+
+        set_status("Stopping Smooth and restoring zone settings...");
+        for (zone = 0; zone < ZONE_COUNT; ++zone)
+        {
+            mode_id[zone] = mode_value("always_on");
+            color_id[zone] = color_value(g_smooth_restore_color[zone]);
+            bright_id[zone] = brightness_value(g_smooth_restore_brightness[zone]);
+            if (color_id[zone] < 0 || bright_id[zone] < 0)
+            {
+                set_status("Unable to restore the pre-Smooth zone settings.");
+                return;
+            }
+        }
+
+        if (y720_apply_zones(mode_id, color_id, bright_id) != 0)
+        {
+            set_status("Unable to restore the pre-Smooth zone settings.");
+            return;
+        }
+
+        for (zone = 0; zone < ZONE_COUNT; ++zone)
+        {
+            select_combo_value(g_zoneColor[zone], g_smooth_restore_color[zone],
+                               colors, (int)(sizeof(colors) / sizeof(colors[0])));
+            select_combo_value(g_zoneBrightness[zone], g_smooth_restore_brightness[zone],
+                               brightness, (int)(sizeof(brightness) / sizeof(brightness[0])));
+        }
+        sync_global_color_from_zones();
+        select_combo_value(g_globalMode, "always_on",
+                           modes, (int)(sizeof(modes) / sizeof(modes[0])));
+        g_smooth_restore_valid = 0;
+        remember_current_on_state();
+        lighting_set_and_save(1, "always_on");
+        set_status("Smooth stopped; original zone settings restored.");
+        return;
+    }
+
+    /*
+     * If lighting is off, restore the normal pre-Off state first. This also
+     * restores the saved colour and brightness used as Smooth's starting point.
+     */
+    if (!g_lighting_on)
+    {
+        turn_on_from_last_state();
+        if (!g_lighting_on)
+        {
+            set_status("Unable to turn keyboard lighting on for Smooth.");
+            return;
+        }
+    }
+
     if (!get_combo_value(g_globalColor, colors, (int)(sizeof(colors) / sizeof(colors[0])), color, sizeof(color)) ||
         !get_combo_value(g_globalBrightness, brightness, (int)(sizeof(brightness) / sizeof(brightness[0])), bright, sizeof(bright)))
     {
@@ -1299,6 +1401,26 @@ static void apply_smooth(void)
     }
 
     set_status("Starting Smooth lighting from the selected colour...");
+
+    /*
+     * Save the actual four-zone state before Smooth intentionally applies
+     * one global starting colour to every zone.
+     */
+    for (zone = 0; zone < ZONE_COUNT; ++zone)
+    {
+        if (!get_combo_value(g_zoneColor[zone], colors,
+                             (int)(sizeof(colors) / sizeof(colors[0])),
+                             g_smooth_restore_color[zone],
+                             sizeof(g_smooth_restore_color[zone])) ||
+            !get_combo_value(g_zoneBrightness[zone], brightness,
+                             (int)(sizeof(brightness) / sizeof(brightness[0])),
+                             g_smooth_restore_brightness[zone],
+                             sizeof(g_smooth_restore_brightness[zone])))
+        {
+            set_status("Unable to save the current zone settings for Smooth.");
+            return;
+        }
+    }
 
     if (apply_all_direct(color, bright, "smooth") == 0)
     {
@@ -1310,8 +1432,13 @@ static void apply_smooth(void)
                 display = color_labels[i];
         snprintf(status, sizeof(status), "Smooth lighting started from %s / %s.", display ? display : friendly_color(color), friendly_brightness(bright));
         set_status(status);
-        remember_current_on_state();
+        g_smooth_restore_valid = 1;
         lighting_set_and_save(_stricmp(bright, "off") != 0, "smooth");
+        update_smooth_toggle_button(1);
+    }
+    else
+    {
+        g_smooth_restore_valid = 0;
     }
 }
 
@@ -1453,6 +1580,7 @@ static void turn_on_from_last_state(void)
              friendly_brightness(g_last_on_global_brightness));
     set_status(status);
     lighting_set_and_save(1, g_last_on_mode);
+    update_smooth_toggle_button(_stricmp(g_last_on_mode, "smooth") == 0);
 }
 
 static void remember_current_on_state(void);
@@ -1495,6 +1623,7 @@ static void turn_off(void)
 
         set_status("Keyboard lighting is off. Fn + Space will start at Low.");
         lighting_set_and_save(0, NULL);
+        update_smooth_toggle_button(0);
     }
 }
 
@@ -1540,13 +1669,16 @@ static void apply_zone(int zone)
 
 /* === PROFILE MANAGEMENT ===
  * Loading, applying and deleting named lighting profiles stored in the config
- * file. Profiles are simple sections with 'color', 'brightness' and 'mode'.
+ * file. Profiles support global 'color'/'brightness' values or four-zone
+ * 'zoneN_color'/'zoneN_brightness' values, plus the keyboard-wide 'mode'.
  */
 static void apply_profile(void)
 {
     int index;
     char profile[128], config[MAX_PATH], color[64] = "", bright[32] = "", mode[64] = "";
+    char zone_color[ZONE_COUNT][64], zone_bright[ZONE_COUNT][32], type[16];
     char status[256], display_profile[128];
+    int zone;
 
     index = (int)SendMessageA(g_profile, CB_GETCURSEL, 0, 0);
     if (index == CB_ERR || index < 0 || index >= g_profile_count)
@@ -1567,12 +1699,14 @@ static void apply_profile(void)
     GetPrivateProfileStringA(profile, "color", "", color, sizeof(color), config);
     GetPrivateProfileStringA(profile, "brightness", "", bright, sizeof(bright), config);
     GetPrivateProfileStringA(profile, "mode", "", mode, sizeof(mode), config);
+    GetPrivateProfileStringA(profile, "type", "global", type, sizeof(type), config);
 
     trim(color);
     trim(bright);
     trim(mode);
+    trim(type);
 
-    if (!color[0] || !bright[0] || !mode[0])
+    if (!mode[0])
     {
         snprintf(status, sizeof(status), "Profile '%s' is incomplete.", display_profile);
         set_status(status);
@@ -1582,8 +1716,60 @@ static void apply_profile(void)
     snprintf(status, sizeof(status), "Applying profile '%s'...", display_profile);
     set_status(status);
 
-    if (apply_all_direct(color, bright, mode) == 0)
+    if (_stricmp(type, "zones") == 0)
     {
+        int mode_id[ZONE_COUNT], color_id[ZONE_COUNT], bright_id[ZONE_COUNT];
+
+        for (zone = 0; zone < ZONE_COUNT; ++zone)
+        {
+            char key[32];
+            snprintf(key, sizeof(key), "zone%d_color", zone);
+            GetPrivateProfileStringA(profile, key, "", zone_color[zone], sizeof(zone_color[zone]), config);
+            snprintf(key, sizeof(key), "zone%d_brightness", zone);
+            GetPrivateProfileStringA(profile, key, "", zone_bright[zone], sizeof(zone_bright[zone]), config);
+            trim(zone_color[zone]);
+            trim(zone_bright[zone]);
+            mode_id[zone] = mode_value(mode);
+            color_id[zone] = color_value(zone_color[zone]);
+            bright_id[zone] = brightness_value(zone_bright[zone]);
+            if (mode_id[zone] < 0 || color_id[zone] < 0 || bright_id[zone] < 0)
+            {
+                set_status("Profile contains invalid four-zone settings.");
+                return;
+            }
+        }
+
+        if (y720_apply_zones(mode_id, color_id, bright_id) != 0)
+        {
+            set_status("Profile could not be applied.");
+            return;
+        }
+
+        select_combo_value(g_globalColor, color, colors, (int)(sizeof(colors) / sizeof(colors[0])));
+        select_combo_value(g_globalBrightness, bright, brightness,
+                           (int)(sizeof(brightness) / sizeof(brightness[0])));
+        select_combo_value(g_globalMode, mode, modes, (int)(sizeof(modes) / sizeof(modes[0])));
+        for (zone = 0; zone < ZONE_COUNT; ++zone)
+        {
+            select_combo_value(g_zoneColor[zone], zone_color[zone], colors, (int)(sizeof(colors) / sizeof(colors[0])));
+            select_combo_value(g_zoneBrightness[zone], zone_bright[zone], brightness, (int)(sizeof(brightness) / sizeof(brightness[0])));
+        }
+        sync_global_color_from_zones();
+        if (zones_have_lighting())
+            remember_current_on_state();
+        snprintf(status, sizeof(status), "Profile '%s' applied with four-zone settings / %s",
+                 display_profile, friendly_mode(mode));
+        set_status(status);
+        lighting_set_and_save(zones_have_lighting(), mode);
+    }
+    else
+    {
+        if (!color[0] || !bright[0] || apply_all_direct(color, bright, mode) != 0)
+        {
+            set_status("Profile contains invalid global settings.");
+            return;
+        }
+
         select_combo_value(g_globalColor, color, colors, (int)(sizeof(colors) / sizeof(colors[0])));
         select_combo_value(g_globalBrightness, bright, brightness, (int)(sizeof(brightness) / sizeof(brightness[0])));
         select_combo_value(g_globalMode, mode, modes, (int)(sizeof(modes) / sizeof(modes[0])));
@@ -1595,10 +1781,6 @@ static void apply_profile(void)
                  friendly_brightness(bright), friendly_mode(mode));
         set_status(status);
         lighting_set_and_save(_stricmp(bright, "off") != 0, mode);
-    }
-    else
-    {
-        set_status("Profile could not be applied.");
     }
 }
 
@@ -1810,10 +1992,24 @@ typedef struct
 {
     HWND hwnd;
     HWND name, color, bright, mode;
+    HWND global_option, zones_option;
+    HWND zone_color[ZONE_COUNT], zone_bright[ZONE_COUNT];
     int accepted;
 } profile_dialog_t;
 
 static profile_dialog_t g_profile_dialog;
+
+static void profile_dialog_set_zone_mode(int use_zones)
+{
+    int zone;
+    EnableWindow(g_profile_dialog.color, !use_zones);
+    EnableWindow(g_profile_dialog.bright, !use_zones);
+    for (zone = 0; zone < ZONE_COUNT; ++zone)
+    {
+        EnableWindow(g_profile_dialog.zone_color[zone], use_zones);
+        EnableWindow(g_profile_dialog.zone_bright[zone], use_zones);
+    }
+}
 
 static void profile_dialog_close(int accepted)
 {
@@ -1837,26 +2033,73 @@ static LRESULT CALLBACK ProfileDialogProc(HWND hwnd, UINT message, WPARAM wParam
         int color_count = (int)(sizeof(colors) / sizeof(colors[0]));
         int bright_count = (int)(sizeof(brightness) / sizeof(brightness[0]));
         int mode_count = (int)(sizeof(modes) / sizeof(modes[0]));
-        create_label(hwnd, "Profile Name", 20, 20, 100, LAYOUT_CONTROL_HEIGHT);
+        char value[64];
+        int zone;
+
+        create_label(hwnd, "Profile Name", 20, 18, 100, LAYOUT_CONTROL_HEIGHT);
         g_profile_dialog.name = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
                                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                                                SCALE(125), SCALE(18), SCALE(235), SCALE(26), hwnd, (HMENU)(INT_PTR)IDC_PROFILE_NAME,
+                                                SCALE(125), SCALE(16), SCALE(375), SCALE(26), hwnd, (HMENU)(INT_PTR)IDC_PROFILE_NAME,
                                                 GetModuleHandleA(NULL), NULL);
         SendMessageA(g_profile_dialog.name, WM_SETFONT, (WPARAM)g_font, TRUE);
-        create_label(hwnd, "Colour", 20, 60, 100, LAYOUT_CONTROL_HEIGHT);
-        g_profile_dialog.color = create_color_combo(hwnd, IDC_PROFILE_COLOR, 125, 56, 235, 300);
+        g_profile_dialog.global_option = CreateWindowExA(
+            0, "BUTTON", "Global colour and brightness",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | WS_GROUP,
+            SCALE(20), SCALE(58), SCALE(260), SCALE(24), hwnd,
+            (HMENU)(INT_PTR)IDC_PROFILE_GLOBAL, GetModuleHandleA(NULL), NULL);
+        g_profile_dialog.zones_option = CreateWindowExA(
+            0, "BUTTON", "Separate settings for each zone",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+            SCALE(20), SCALE(132), SCALE(300), SCALE(24), hwnd,
+            (HMENU)(INT_PTR)IDC_PROFILE_ZONES, GetModuleHandleA(NULL), NULL);
+        SendMessageA(g_profile_dialog.global_option, WM_SETFONT, (WPARAM)g_font, TRUE);
+        SendMessageA(g_profile_dialog.zones_option, WM_SETFONT, (WPARAM)g_font, TRUE);
+        SendMessageA(g_profile_dialog.global_option, BM_SETCHECK, BST_CHECKED, 0);
+
+        create_label(hwnd, "Colour", 20, 94, 55, LAYOUT_CONTROL_HEIGHT);
+        g_profile_dialog.color = create_color_combo(hwnd, IDC_PROFILE_COLOR, 75, 90, 185, 300);
         add_combo_items(g_profile_dialog.color, color_labels, color_count);
         select_combo_value(g_profile_dialog.color, "crimson", colors, color_count);
-        create_label(hwnd, "Brightness", 20, 100, 100, LAYOUT_CONTROL_HEIGHT);
-        g_profile_dialog.bright = create_brightness_combo(hwnd, IDC_PROFILE_BRIGHTNESS, 125, 96, 235, 300);
+        create_label(hwnd, "Brightness", 275, 94, 75, LAYOUT_CONTROL_HEIGHT);
+        g_profile_dialog.bright = create_brightness_combo(hwnd, IDC_PROFILE_BRIGHTNESS, 350, 90, 185, 300);
         add_combo_items(g_profile_dialog.bright, brightness_labels, bright_count);
         select_combo_value(g_profile_dialog.bright, "high", brightness, bright_count);
-        create_label(hwnd, "Mode", 20, 140, 100, LAYOUT_CONTROL_HEIGHT);
-        g_profile_dialog.mode = create_combo(hwnd, IDC_PROFILE_MODE, 125, 136, 235, 300);
+        if (get_combo_value(g_globalColor, colors, color_count, value, sizeof(value)))
+            select_combo_value(g_profile_dialog.color, value, colors, color_count);
+        if (get_combo_value(g_globalBrightness, brightness, bright_count, value, sizeof(value)))
+            select_combo_value(g_profile_dialog.bright, value, brightness, bright_count);
+        create_label(hwnd, "Zone", 20, 166, 80, LAYOUT_CONTROL_HEIGHT);
+        create_label(hwnd, "Colour", 130, 166, 120, LAYOUT_CONTROL_HEIGHT);
+        create_label(hwnd, "Brightness", 385, 166, 110, LAYOUT_CONTROL_HEIGHT);
+        for (zone = 0; zone < ZONE_COUNT; ++zone)
+        {
+            int y = 196 + zone * 42;
+            char zone_label[32];
+            snprintf(zone_label, sizeof(zone_label), "Zone %d", zone);
+            create_label(hwnd, zone_label, 20, y + 4, 80, LAYOUT_CONTROL_HEIGHT);
+            g_profile_dialog.zone_color[zone] = create_color_combo(
+                hwnd, IDC_PROFILE_ZONE_BASE + zone * 2, 105, y, 260, 260);
+            add_combo_items(g_profile_dialog.zone_color[zone], color_labels, color_count);
+            g_profile_dialog.zone_bright[zone] = create_brightness_combo(
+                hwnd, IDC_PROFILE_ZONE_BASE + zone * 2 + 1, 380, y, 155, 260);
+            add_combo_items(g_profile_dialog.zone_bright[zone], brightness_labels, bright_count);
+
+            if (get_combo_value(g_zoneColor[zone], colors, color_count, value, sizeof(value)))
+                select_combo_value(g_profile_dialog.zone_color[zone], value, colors, color_count);
+            if (get_combo_value(g_zoneBrightness[zone], brightness, bright_count, value, sizeof(value)))
+                select_combo_value(g_profile_dialog.zone_bright[zone], value, brightness, bright_count);
+        }
+        profile_dialog_set_zone_mode(0);
+
+        create_label(hwnd, "Keyboard Mode", 20, 380, 100, LAYOUT_CONTROL_HEIGHT);
+        g_profile_dialog.mode = create_combo(hwnd, IDC_PROFILE_MODE, 125, 376, 250, 300);
         add_combo_items(g_profile_dialog.mode, mode_labels, mode_count);
         select_combo_value(g_profile_dialog.mode, "always_on", modes, mode_count);
-        create_button(hwnd, "Save Profile", IDC_PROFILE_SAVE, 90, 185, LAYOUT_BUTTON_WIDTH, LAYOUT_BUTTON_HEIGHT);
-        create_button(hwnd, "Cancel", IDC_PROFILE_CANCEL, 230, 185, LAYOUT_BUTTON_WIDTH, LAYOUT_BUTTON_HEIGHT);
+        if (get_combo_value(g_globalMode, modes, mode_count, value, sizeof(value)))
+            select_combo_value(g_profile_dialog.mode, value, modes, mode_count);
+
+        create_button(hwnd, "Save Profile", IDC_PROFILE_SAVE, 170, 430, LAYOUT_BUTTON_WIDTH, LAYOUT_BUTTON_HEIGHT);
+        create_button(hwnd, "Cancel", IDC_PROFILE_CANCEL, 310, 430, LAYOUT_BUTTON_WIDTH, LAYOUT_BUTTON_HEIGHT);
         SendMessageA(hwnd, DM_SETDEFID, IDC_PROFILE_SAVE, 0);
         return 0;
     }
@@ -1909,6 +2152,16 @@ static LRESULT CALLBACK ProfileDialogProc(HWND hwnd, UINT message, WPARAM wParam
     }
 
     case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_PROFILE_GLOBAL && HIWORD(wParam) == BN_CLICKED)
+        {
+            profile_dialog_set_zone_mode(0);
+            return 0;
+        }
+        if (LOWORD(wParam) == IDC_PROFILE_ZONES && HIWORD(wParam) == BN_CLICKED)
+        {
+            profile_dialog_set_zone_mode(1);
+            return 0;
+        }
         if (LOWORD(wParam) == IDCANCEL || LOWORD(wParam) == IDC_PROFILE_CANCEL)
         {
             profile_dialog_close(0);
@@ -1917,7 +2170,11 @@ static LRESULT CALLBACK ProfileDialogProc(HWND hwnd, UINT message, WPARAM wParam
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDC_PROFILE_SAVE)
         {
             char name[128], color[64], bright[32], mode[64], config[MAX_PATH];
+            char zone_color[ZONE_COUNT][64], zone_bright[ZONE_COUNT][32];
             char display[128];
+            int zone;
+            int use_zones = (int)SendMessageA(g_profile_dialog.zones_option, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            int all_zones_same = 1;
             GetWindowTextA(g_profile_dialog.name, name, sizeof(name));
             trim(name);
             if (!is_valid_profile_name(name))
@@ -1925,19 +2182,64 @@ static LRESULT CALLBACK ProfileDialogProc(HWND hwnd, UINT message, WPARAM wParam
                 MessageBoxA(hwnd, "Profile name must be 1-64 characters and cannot contain special characters: [ ] = \\ / \" ; : * ? < > |", "Profile", MB_ICONWARNING);
                 return 0;
             }
-            if (!get_combo_value(g_profile_dialog.color, colors, (int)(sizeof(colors) / sizeof(colors[0])), color, sizeof(color)) ||
-                !get_combo_value(g_profile_dialog.bright, brightness, (int)(sizeof(brightness) / sizeof(brightness[0])), bright, sizeof(bright)) ||
-                !get_combo_value(g_profile_dialog.mode, modes, (int)(sizeof(modes) / sizeof(modes[0])), mode, sizeof(mode)) ||
+            if (!get_combo_value(g_profile_dialog.mode, modes, (int)(sizeof(modes) / sizeof(modes[0])), mode, sizeof(mode)) ||
                 !get_config_path(config, sizeof(config)))
                 return 0;
+            if (!use_zones &&
+                (!get_combo_value(g_profile_dialog.color, colors, (int)(sizeof(colors) / sizeof(colors[0])), color, sizeof(color)) ||
+                 !get_combo_value(g_profile_dialog.bright, brightness, (int)(sizeof(brightness) / sizeof(brightness[0])), bright, sizeof(bright))))
+                return 0;
+            if (use_zones)
+            {
+                for (zone = 0; zone < ZONE_COUNT; ++zone)
+                {
+                    if (!get_combo_value(g_profile_dialog.zone_color[zone], colors, (int)(sizeof(colors) / sizeof(colors[0])), zone_color[zone], sizeof(zone_color[zone])) ||
+                        !get_combo_value(g_profile_dialog.zone_bright[zone], brightness, (int)(sizeof(brightness) / sizeof(brightness[0])), zone_bright[zone], sizeof(zone_bright[zone])))
+                        return 0;
+                    if (zone > 0 &&
+                        (_stricmp(zone_color[zone], zone_color[0]) != 0 ||
+                         _stricmp(zone_bright[zone], zone_bright[0]) != 0))
+                        all_zones_same = 0;
+                }
+                if (all_zones_same)
+                {
+                    snprintf(color, sizeof(color), "%s", zone_color[0]);
+                    snprintf(bright, sizeof(bright), "%s", zone_bright[0]);
+                    use_zones = 0;
+                }
+                else
+                {
+                    /*
+                     * Keep representative values for profile discovery and
+                     * compatibility; zone values are authoritative for zones.
+                     */
+                    snprintf(color, sizeof(color), "%s", zone_color[0]);
+                    snprintf(bright, sizeof(bright), "%s", zone_bright[0]);
+                }
+            }
             if (GetPrivateProfileStringA(name, "color", "", display, sizeof(display), config) > 0)
             {
                 if (MessageBoxA(hwnd, "A profile with this name already exists. Replace it?", "Profile", MB_YESNO | MB_ICONQUESTION) != IDYES)
                     return 0;
             }
+            WritePrivateProfileStringA(name, "type", use_zones ? "zones" : "global", config);
             WritePrivateProfileStringA(name, "color", color, config);
             WritePrivateProfileStringA(name, "brightness", bright, config);
             WritePrivateProfileStringA(name, "mode", mode, config);
+            for (zone = 0; zone < ZONE_COUNT; ++zone)
+            {
+                char key[32];
+                snprintf(key, sizeof(key), "zone%d_color", zone);
+                if (use_zones)
+                    WritePrivateProfileStringA(name, key, zone_color[zone], config);
+                else
+                    WritePrivateProfileStringA(name, key, NULL, config);
+                snprintf(key, sizeof(key), "zone%d_brightness", zone);
+                if (use_zones)
+                    WritePrivateProfileStringA(name, key, zone_bright[zone], config);
+                else
+                    WritePrivateProfileStringA(name, key, NULL, config);
+            }
             profile_dialog_close(1);
             return 0;
         }
@@ -1964,7 +2266,7 @@ static int create_profile_dialog(HWND owner)
     ZeroMemory(&g_profile_dialog, sizeof(g_profile_dialog));
     g_profile_dialog.hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME, class_name, "Create Profile",
                                             WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE,
-                                            CW_USEDEFAULT, CW_USEDEFAULT, SCALE(390), SCALE(260), owner, NULL, GetModuleHandleA(NULL), NULL);
+                                            CW_USEDEFAULT, CW_USEDEFAULT, SCALE(560), SCALE(500), owner, NULL, GetModuleHandleA(NULL), NULL);
     if (!g_profile_dialog.hwnd)
     {
         EnableWindow(owner, TRUE);
@@ -2079,22 +2381,43 @@ static void hide_to_tray(void)
 
 static void show_tray_menu(HWND hwnd)
 {
-    HMENU menu = CreatePopupMenu();
+    HMENU menu;
     POINT point;
-    if (!menu)
-        return;
-    AppendMenuA(menu, MF_STRING, ID_TRAY_OFF, "Turn Lighting Off");
-    AppendMenuA(menu, MF_STRING, ID_TRAY_ON, "Turn Lighting On");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING, ID_TRAY_EXIT, "Exit");
-    if (!GetCursorPos(&point))
+    UINT lighting_flags;
+    UINT smooth_flags;
+
+    menu = CreatePopupMenu();
+    if (!menu || !GetCursorPos(&point))
     {
-        DestroyMenu(menu);
+        if (menu)
+            DestroyMenu(menu);
         return;
     }
+
+    lighting_flags = MF_STRING;
+    if (g_lighting_on)
+        lighting_flags |= MF_CHECKED;
+
+    smooth_flags = MF_STRING;
+    if (g_smooth_active)
+        smooth_flags |= MF_CHECKED;
+
+    AppendMenuA(menu, lighting_flags, TRAY_TOGGLE_LIGHTING,
+                g_lighting_on ? "Turn Lighting Off" : "Turn Lighting On");
+    AppendMenuA(menu, smooth_flags, TRAY_TOGGLE_SMOOTH,
+                g_smooth_active ? "Stop Smooth" : "Start Smooth");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, TRAY_SHOW, "Open Keyboard Backlight Controller");
+    AppendMenuA(menu, MF_STRING, TRAY_EXIT, "Exit");
+
     SetForegroundWindow(hwnd);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_NOANIMATION,
-                   point.x, point.y, 0, hwnd, NULL);
+    TrackPopupMenu(menu,
+                   TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN,
+                   point.x,
+                   point.y,
+                   0,
+                   hwnd,
+                   NULL);
     PostMessageA(hwnd, WM_NULL, 0, 0);
     DestroyMenu(menu);
 }
@@ -2322,6 +2645,9 @@ static int is_color_combo_hwnd(HWND hwnd)
     if (g_profile_dialog.color && hwnd == g_profile_dialog.color)
         return 1;
     for (i = 0; i < ZONE_COUNT; ++i)
+        if (g_profile_dialog.zone_color[i] && hwnd == g_profile_dialog.zone_color[i])
+            return 1;
+    for (i = 0; i < ZONE_COUNT; ++i)
         if (g_zoneColor[i] && hwnd == g_zoneColor[i])
             return 1;
     return 0;
@@ -2336,6 +2662,9 @@ static int is_brightness_combo_hwnd(HWND hwnd)
         return 1;
     if (g_profile_dialog.bright && hwnd == g_profile_dialog.bright)
         return 1;
+    for (i = 0; i < ZONE_COUNT; ++i)
+        if (g_profile_dialog.zone_bright[i] && hwnd == g_profile_dialog.zone_bright[i])
+            return 1;
     for (i = 0; i < ZONE_COUNT; ++i)
         if (g_zoneBrightness[i] && hwnd == g_zoneBrightness[i])
             return 1;
@@ -2587,7 +2916,7 @@ static void create_controls(HWND hwnd)
     create_group(hwnd, "Smooth Lighting", LAYOUT_MARGIN_X, 240, LAYOUT_GROUP_WIDTH_FULL, LAYOUT_GROUP_HEIGHT_SMALL);
     create_label(hwnd, "Cycles colours automatically, starting from the selected global colour and brightness.",
                  45, 270, 600, 25);
-    create_button(hwnd, "Start Smooth", IDC_SMOOTH, 660, 265, 130, LAYOUT_BUTTON_HEIGHT);
+    g_smoothToggle = create_button(hwnd, "Start Smooth", IDC_SMOOTH, 660, 265, 130, LAYOUT_BUTTON_HEIGHT);
 
     create_group(hwnd, "Individual Zone Colour and Brightness", LAYOUT_MARGIN_X, 330, LAYOUT_GROUP_WIDTH_FULL, LAYOUT_GROUP_HEIGHT_LARGE);
     create_label(hwnd, "Zone", 45, 360, 65, 22);
@@ -2637,6 +2966,13 @@ static void create_controls(HWND hwnd)
 
     load_state_into_controls();
     load_last_on_state();
+    {
+        char mode[64];
+        if (get_combo_value(g_globalMode, modes,
+                            (int)(sizeof(modes) / sizeof(modes[0])),
+                            mode, sizeof(mode)))
+            update_smooth_toggle_button(_stricmp(mode, "smooth") == 0);
+    }
 
     create_label(hwnd, "Status", 30, 710, 55, LAYOUT_CONTROL_HEIGHT);
     /* Reduce width slightly to make room for the Uninstall button on the right */
@@ -2739,17 +3075,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             perform_uninstall(hwnd);
             return 0;
         }
-        if (id == ID_TRAY_OFF)
+        if (id == TRAY_TOGGLE_LIGHTING)
         {
-            turn_off();
+            toggle_lighting();
             return 0;
         }
-        if (id == ID_TRAY_ON)
+        if (id == TRAY_TOGGLE_SMOOTH)
         {
-            turn_on_from_last_state();
+            apply_smooth();
             return 0;
         }
-        if (id == ID_TRAY_EXIT)
+        if (id == TRAY_SHOW)
+        {
+            show_main_window();
+            return 0;
+        }
+        if (id == TRAY_EXIT)
         {
             exit_application(hwnd);
             return 0;
